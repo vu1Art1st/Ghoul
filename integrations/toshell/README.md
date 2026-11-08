@@ -53,7 +53,16 @@ Invoke-RestMethod http://127.0.0.1:18081/api/v1/sessions `
     "base_url": "http://127.0.0.1:18081",
     "api_key_ref": "env:TOSHELL_API_KEY",
     "allow_confirm": false,
-    "allow_danger": false
+    "allow_danger": false,
+    "allow_tunnel": false,
+    "allow_unscoped_tasks": false,
+    "danger_approvals": 2,
+    "approval_ttl_seconds": 300,
+    "max_operations_per_minute": 30,
+    "output_max_bytes": 262144,
+    "allowed_hosts": [],
+    "allow_insecure_http": false,
+    "tls_ca_file": ""
   }
 }
 ```
@@ -173,3 +182,12 @@ Phase 4 将 Confirm/Danger 操作纳入 Ghoul 的统一策略、审批和证据�
 - 高级操作仍只在 Ghoul 原生命令面和审批中心完成；Toshell 高级控制台仅作为新窗口深链接。
 
 Token A/B 基线：Planner 只加载 3 个只读工具（`327` estimated tokens / `426` with safety），Worker 完整 8 工具面为 `955` / `1242`，均低于 `2,000` schema 预算。记录见 [`contract/phase5_autonomous_baseline.json`](contract/phase5_autonomous_baseline.json)。
+
+## Phase 6：加固与发布
+
+- 默认只允许 loopback Toshell；远程 sidecar 必须 HTTPS，并通过 `c2.allowed_hosts` 显式放行。
+- `file:` 密钥引用限制文件大小；Unix 下拒绝组/其他用户可读的密钥文件。HTTP 客户端不继承环境代理，重定向必须留在原 host。
+- Danger 操作固定两阶段审批；令牌带短 TTL、参数哈希和任务/session/binding 快照，审批后不可复用。
+- `GET /api/c2/security` 输出安全自检结果；审批中心显示自检状态，不展示 API Key 或令牌。
+- 输出脱敏、不可信内容边界、操作限流、幂等键和危险操作禁止自动重试共同构成故障与注入防护。
+- 发布前备份 Ghoul PostgreSQL；回滚关闭 `c2.enabled`，保留 `c2_operations`、`c2_operation_approvals`、`c2_evidence`，不修改 Toshell 数据库。

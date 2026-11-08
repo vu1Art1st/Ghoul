@@ -16,7 +16,7 @@ type c2SecurityCheck struct {
 func (s *Server) c2Security(w http.ResponseWriter, r *http.Request) {
 	if s.c2 == nil {
 		writeJSON(w, 200, map[string]any{
-			"ok": false,
+			"ok":     false,
 			"checks": []c2SecurityCheck{{Name: "adapter", OK: false, Detail: "C2 adapter is disabled"}},
 			"notes":  []string{"Enable C2 only after reading the Toshell integration guide."},
 		})

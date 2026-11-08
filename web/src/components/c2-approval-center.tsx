@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
-import type { C2Evidence, C2Operation, C2OperationDetail } from "@/lib/types";
+import type { C2Evidence, C2Operation, C2OperationDetail, C2Security } from "@/lib/types";
 
 function fmtTime(value?: string): string {
   if (!value) return "—";
@@ -38,6 +38,7 @@ export function C2ApprovalCenter({ baseURL }: { baseURL?: string }) {
   const [items, setItems] = React.useState<C2Operation[]>([]);
   const [selectedID, setSelectedID] = React.useState("");
   const [detail, setDetail] = React.useState<C2OperationDetail | null>(null);
+  const [security, setSecurity] = React.useState<C2Security | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState("");
   const [reason, setReason] = React.useState("人工复核通过");
@@ -47,8 +48,9 @@ export function C2ApprovalCenter({ baseURL }: { baseURL?: string }) {
   const load = React.useCallback(async () => {
     setLoading(true);
     try {
-      const result = await api.c2Operations({ limit: 200 });
+      const [result, securityResult] = await Promise.all([api.c2Operations({ limit: 200 }), api.c2Security()]);
       setItems(result.items);
+      setSecurity(securityResult);
       if (!selectedID || !result.items.some((item) => item.id === selectedID)) {
         setSelectedID(result.items[0]?.id ?? "");
       }
@@ -160,6 +162,11 @@ export function C2ApprovalCenter({ baseURL }: { baseURL?: string }) {
               C2 操作审批
               <Badge variant="secondary">{pending.length} 待审批</Badge>
             </CardTitle>
+            {security ? (
+              <Badge variant={security.ok ? "default" : "destructive"}>
+                {security.ok ? "安全自检通过" : "安全自检告警"}
+              </Badge>
+            ) : null}
             <Button variant="ghost" size="icon" onClick={() => void load()} disabled={loading}>
               <RefreshCw className={loading ? "animate-spin" : ""} />
             </Button>

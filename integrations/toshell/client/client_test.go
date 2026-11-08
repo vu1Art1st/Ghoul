@@ -73,3 +73,24 @@ func TestClientReadEndpoints(t *testing.T) {
 		t.Fatalf("channels: %+v %v", channels, err)
 	}
 }
+
+func TestClientRejectsUnsafeTransportAndHost(t *testing.T) {
+	if _, err := New(Config{BaseURL: "http://192.0.2.10:18081", APIKeyRef: "env:TEST_TOSHELL_KEY"}); err == nil {
+		t.Fatal("non-loopback HTTP sidecar must be rejected")
+	}
+	if _, err := New(Config{BaseURL: "https://sidecar.example.com", APIKeyRef: "env:TEST_TOSHELL_KEY"}); err == nil {
+		t.Fatal("non-allowlisted sidecar host must be rejected")
+	}
+}
+
+func TestHostAllowed(t *testing.T) {
+	if !hostAllowed("127.0.0.1", nil) || !hostAllowed("localhost", nil) {
+		t.Fatal("loopback hosts should be allowed by default")
+	}
+	if hostAllowed("sidecar.example.com", nil) {
+		t.Fatal("remote host should require an allowlist")
+	}
+	if !hostAllowed("sidecar.example.com", []string{"sidecar.example.com"}) {
+		t.Fatal("explicit host allowlist should work")
+	}
+}

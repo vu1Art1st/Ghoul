@@ -578,26 +578,6 @@ flowchart TB
 
 ---
 
-## 参考项目与来源声明
-
-以下项目统一作为 Ghoul 的来源、对照或演进参考列出；具体代码吸收按合并计划和对应工作包逐项记录，未复制项目的许可证以各自仓库为准。
-
-- [Ghoul](https://github.com/vu1Art1st/Ghoul)：本仓库，AGPL-3.0。
-- [ARTEX](https://github.com/Autumn-27/ARTEX)：Ghoul 的上游演进基础，AGPL-3.0。
-- [ARTEX-main](https://github.com/sharenjun/ARTEX-main)：可靠性、Planner handoff、完成审计、Worker 池和 Repeater 参考。
-- [Pojun](https://github.com/chu0119/Pojun)：漏洞情报、证据硬闸、意图预算、DOCX 报告和 Skill 参考。
-- [artex-ymh](https://github.com/panda0x123/artex-ymh)：LLM 墙钟、deadline、chains、RoE、伪装门控和 doctor 参考。
-- [artex-ld](https://github.com/IcebergN2026/artex-ld)：意图审核、场景模板、Finding 派发和证据版本参考。
-- [RuoJi6/ARTEX](https://github.com/RuoJi6/ARTEX)：Basic Auth、日历任务、代理池、Egress Probe 和 Finding 归并参考。
-- [Toshell](https://github.com/iQingshan/Toshell)：唯一 C2 后端，锁定 `v1.4.3 / 8bf4643`，MIT。
-- [ScopeSentry](https://github.com/Autumn-27/ScopeSentry)：资产同步参考。
-- [AegisHook](https://github.com/RuoJi6/AegisHook)：审批详情组件展示结构参考。
-- [norma](https://github.com/Autumn-27/norma)：Agent SDK 来源；上游已转为闭源，本仓库使用恢复后的 `v0.4.3` 模块。
-- [Cairn](https://github.com/oritera/Cairn)：架构与交互参考。
-
-### AGPL 来源与修改说明
-
-Ghoul 的修改、分发和网络部署继续适用 AGPL-3.0。Toshell 通过独立 sidecar 和 REST 集成，本轮没有复制、修改或静态链接 Toshell 源码；契约快照仅记录公开 API 响应。若后续复制或修改 Toshell 代码，必须保留其 MIT notice，并在本文件、发布说明和对应源文件中记录变更与日期。
 ## C2 审批式操作（Phase 4）
 
 Phase 4 已把 Toshell Confirm/Danger 操作纳入 Ghoul 的策略、审批和证据链：
@@ -622,3 +602,43 @@ Phase 5 在 Phase 4 的审批账本上补齐半自主 C2 工作流：
 - Planner 仍只加载 3 个只读工具；Worker 完整 8 工具面实测为 955 estimated tokens（1,242 with safety），低于 2,000 schema 预算，记录见 `integrations/toshell/contract/phase5_autonomous_baseline.json`。
 
 验证：`go test ./integrations/toshell/contract ./integrations/toshell/policy ./integrations/toshell/sanitize` 和 `pnpm exec tsc --noEmit` 通过。Toshell 仍为独立 MIT sidecar，未复制或修改其源码。
+
+## C2 安全收口（Phase 6）
+
+Phase 6 对 C2 接入做了发布前加固：
+
+- 网络隔离：默认只允许 loopback sidecar；远程地址必须使用 HTTPS，并显式加入 `c2.allowed_hosts`。HTTP 客户端禁用代理继承，重定向必须留在原 host。
+- 密钥管理：API Key 只接受 `env:NAME` 或 `file:PATH`；文件引用限制大小，Unix 下要求非组/其他用户可读；密钥不会返回浏览器、Agent、日志或操作参数。
+- 双人审批：Danger 固定两阶段审批；令牌短 TTL、参数哈希、任务/session/binding 快照绑定，审批后一次性消费。
+- 故障与注入防护：C2 输出经过控制字符清理、凭据脱敏、不可信内容边界包装和大小上限；危险操作禁止自动重试，操作幂等键防止重复投递。
+- Token 回归：Planner 只读面 327 estimated tokens（426 safety），Worker 8 工具面 955（1,242 safety），均低于 2,000 schema 预算。
+- UI 边界：不嵌入 iframe；Toshell 高级控制台仅使用 `target=_blank` 新窗口链接，审批与证据绑定在 Ghoul 原生页面完成。
+- 安全自检：`GET /api/c2/security` 检查密钥引用、host allowlist、TLS/loopback、审批 TTL、双阶段 Danger 和输出上限。
+
+### 发布与回滚
+
+1. 发布前备份 Ghoul PostgreSQL，并运行 `go test ./integrations/toshell/... ./config ./db`、`go build ./...`、`pnpm exec tsc --noEmit`。
+2. 默认发布配置保持 `c2.enabled=false`、`c2.allow_confirm=false`、`c2.allow_danger=false`；需要 C2 时再逐项开启。
+3. 回滚只需关闭 `c2.enabled` 停止新的 C2 操作；已提交的 Toshell 任务由 Toshell 继续执行，但 Ghoul 不再自动恢复。
+4. 保留 `c2_operations`、`c2_operation_approvals` 和 `c2_evidence`，不要删除审计链；回滚前备份 Ghoul PostgreSQL，回滚不修改 Toshell 数据库。
+
+## 参考项目与来源声明
+
+以下项目统一作为 Ghoul 的来源、对照或演进参考列出；具体代码吸收按合并计划和对应工作包逐项记录，未复制项目的许可证以各自仓库为准。
+
+- [Ghoul](https://github.com/vu1Art1st/Ghoul)：本仓库，AGPL-3.0。
+- [ARTEX](https://github.com/Autumn-27/ARTEX)：Ghoul 的上游演进基础，AGPL-3.0。
+- [ARTEX-main](https://github.com/sharenjun/ARTEX-main)：可靠性、Planner handoff、完成审计、Worker 池和 Repeater 参考。
+- [Pojun](https://github.com/chu0119/Pojun)：漏洞情报、证据硬闸、意图预算、DOCX 报告和 Skill 参考。
+- [artex-ymh](https://github.com/panda0x123/artex-ymh)：LLM 墙钟、deadline、chains、RoE、伪装门控和 doctor 参考。
+- [artex-ld](https://github.com/IcebergN2026/artex-ld)：意图审核、场景模板、Finding 派发和证据版本参考。
+- [RuoJi6/ARTEX](https://github.com/RuoJi6/ARTEX)：Basic Auth、日历任务、代理池、Egress Probe 和 Finding 归并参考。
+- [Toshell](https://github.com/iQingshan/Toshell)：唯一 C2 后端，锁定 `v1.4.3 / 8bf4643`，MIT。
+- [ScopeSentry](https://github.com/Autumn-27/ScopeSentry)：资产同步参考。
+- [AegisHook](https://github.com/RuoJi6/AegisHook)：审批详情组件展示结构参考。
+- [norma](https://github.com/Autumn-27/norma)：Agent SDK 来源；上游已转为闭源，本仓库使用恢复后的 `v0.4.3` 模块。
+- [Cairn](https://github.com/oritera/Cairn)：架构与交互参考。
+
+### AGPL 来源与修改说明
+
+Ghoul 的修改、分发和网络部署继续适用 AGPL-3.0。Toshell 通过独立 sidecar 和 REST 集成，本轮没有复制、修改或静态链接 Toshell 源码；契约快照仅记录公开 API 响应。若后续复制或修改 Toshell 代码，必须保留其 MIT notice，并在本文件、发布说明和对应源文件中记录变更与日期。

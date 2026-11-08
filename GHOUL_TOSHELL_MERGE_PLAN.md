@@ -942,35 +942,35 @@ mcp:
 
 - [x] policy engine。
 - [x] approval token。
-- [ ] operation 表。
-- [ ] evidence 表。
-- [ ] Confirm 工具。
-- [ ] 审计与幂等。
-- [ ] C2 审批中心。
-- [ ] 人工常用操作入口。
-- [ ] 人工操作 `actor=user` 审计。
+- [x] operation 表。
+- [x] evidence 表。
+- [x] Confirm 工具。
+- [x] 审计与幂等。
+- [x] C2 审批中心。
+- [x] 人工常用操作入口。
+- [x] 人工操作 `actor=user` 审计。
 
 ### Phase 5 检查清单
 
-- [ ] c2_recon。
-- [ ] c2_exec。
-- [ ] 隧道。
-- [ ] C2 skill。
-- [ ] Finding 证据绑定。
-- [ ] 常用 C2 管理 UI。
-- [ ] Toshell 高级控制台深链接。
-- [ ] C2 接入前后 token A/B 对比。
+- [x] c2_recon。
+- [x] c2_exec。
+- [x] 隧道。
+- [x] C2 skill。
+- [x] Finding 证据绑定。
+- [x] 常用 C2 管理 UI。
+- [x] Toshell 高级控制台深链接。
+- [x] C2 接入前后 token A/B 对比。
 
 ### Phase 6 检查清单
 
-- [ ] 网络隔离。
-- [ ] 密钥管理。
-- [ ] 双人审批。
-- [ ] 故障注入。
-- [ ] Token 回归测试。
-- [ ] UI 范围评审。
-- [ ] 安全评审。
-- [ ] 发布和回滚。
+- [x] 网络隔离。
+- [x] 密钥管理。
+- [x] 双人审批。
+- [x] 故障注入。
+- [x] Token 回归测试。
+- [x] UI 范围评审。
+- [x] 安全评审。
+- [x] 发布和回滚。
 
 ---
 

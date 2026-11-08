@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **Toshell C2 接入（Phase 3-6）**：新增只读会话同步、任务/监听器/事件账本、审批式 Confirm/Danger 操作、C2 证据物化、Finding 证据关联、C2 审批中心与操作详情页。
+- **C2 安全边界**：API Key 仅支持 `env:` / `file:` secret reference；默认 loopback sidecar，远程连接要求 HTTPS + host allowlist；Danger 双阶段审批，令牌短 TTL、参数哈希和任务/session 快照绑定；输出脱敏、限流、幂等和危险操作禁止自动重试。
+- **高级 C2 与半自主**：`c2_recon` 白名单只读执行、`c2_exec` Danger 工具、`c2_tunnel` 显式开关、`c2-operations` Skill，以及 Planner/Worker token A/B 基线。
+
+### 安全
+
+- 新增 `GET /api/c2/security` 自检、C2 输出注入防护、Toshell 管理台新窗口边界和回滚保留审计链说明。
+
 ## [0.3.15] - 2026-10-07
 
 ### 拦截
