@@ -1,0 +1,27 @@
+{
+  "phase": 5,
+  "scope": "worker_confirm_danger",
+  "tools": [
+    "c2_session_list",
+    "c2_session_context",
+    "c2_recon",
+    "c2_file_list",
+    "c2_process_list",
+    "c2_screenshot",
+    "c2_tunnel",
+    "c2_exec"
+  ],
+  "tool_count": 8,
+  "json_bytes": 3508,
+  "estimated_tokens": 955,
+  "estimated_tokens_with_safety": 1242,
+  "schema_token_budget": 2000,
+  "output_token_budget": 4000,
+  "under_budget": true,
+  "planner_default": [
+    "c2_session_list",
+    "c2_session_context",
+    "c2_recon"
+  ],
+  "loading": "deferred host tools; Confirm/Danger worker tools require an active C2 binding"
+}

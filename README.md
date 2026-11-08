@@ -610,3 +610,15 @@ Phase 4 已把 Toshell Confirm/Danger 操作纳入 Ghoul 的策略、审批和�
 - `/system/c2/approvals` 提供审批中心，`/function/c2/operations/[id]` 提供操作详情；Toshell 管理台仅通过新窗口链接打开，不使用 iframe。
 
 验证：`go test ./integrations/toshell/approval ./integrations/toshell/policy ./integrations/toshell/sanitize ./integrations/toshell/client ./config`、后端编译和 `pnpm exec tsc --noEmit` 通过。参考项目与 AGPL 来源说明见本文件末尾“参考项目与源码引用”一节。
+
+## 高级 C2 与半自主（Phase 5）
+
+Phase 5 在 Phase 4 的审批账本上补齐半自主 C2 工作流：
+
+- `c2_recon` 执行白名单只读动作；`c2_exec` 固定 Danger 等级，默认关闭，开启后需要两个审批阶段，且不会自动重试。
+- `c2_tunnel` 支持 list/start/stop，必须显式配置 `c2.allow_tunnel=true`，并继续受任务范围、session binding 和限流约束。
+- `c2-operations` Skill 默认绑定 Worker/Pentest，明确要求先读取绑定会话、再走审批、最后把证据关联到 Finding。
+- 审批中心支持将 C2 物化证据绑定到 Finding；Finding 证据时间线会保留 C2 operation/session 来源、哈希和脱敏状态。
+- Planner 仍只加载 3 个只读工具；Worker 完整 8 工具面实测为 955 estimated tokens（1,242 with safety），低于 2,000 schema 预算，记录见 `integrations/toshell/contract/phase5_autonomous_baseline.json`。
+
+验证：`go test ./integrations/toshell/contract ./integrations/toshell/policy ./integrations/toshell/sanitize` 和 `pnpm exec tsc --noEmit` 通过。Toshell 仍为独立 MIT sidecar，未复制或修改其源码。

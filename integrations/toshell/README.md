@@ -162,3 +162,14 @@ Phase 4 将 Confirm/Danger 操作纳入 Ghoul 的统一策略、审批和证据�
 - 不使用 iframe；Toshell 管理台仅通过新窗口链接打开。
 
 验证：`go test ./integrations/toshell/approval ./integrations/toshell/policy ./integrations/toshell/sanitize ./integrations/toshell/client ./config`、后端编译和 `pnpm exec tsc --noEmit` 通过。
+
+## Phase 5：高级 C2 与半自主
+
+- `c2_recon` 已从摘要占位升级为白名单只读执行；输出不直接回灌上下文，而是物化为证据并返回摘要。
+- `c2_exec` 固定为 Danger，默认关闭；启用后必须完成两个审批阶段，禁止自动重试。
+- `c2_tunnel` 支持 list/start/stop，并要求 `c2.allow_tunnel=true`；隧道操作仍绑定任务和 session。
+- `c2-operations` Skill 默认对 Worker/Pentest 可见，指导 Agent 先查绑定、再审批、最后关联 Finding。
+- 审批中心支持把物化证据绑定到 Finding，证据哈希、来源和 operation/session 元数据写入 Finding 证据时间线。
+- 高级操作仍只在 Ghoul 原生命令面和审批中心完成；Toshell 高级控制台仅作为新窗口深链接。
+
+Token A/B 基线：Planner 只加载 3 个只读工具（`327` estimated tokens / `426` with safety），Worker 完整 8 工具面为 `955` / `1242`，均低于 `2,000` schema 预算。记录见 [`contract/phase5_autonomous_baseline.json`](contract/phase5_autonomous_baseline.json)。
