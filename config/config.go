@@ -24,10 +24,25 @@ type Database struct {
 	SSLMode  string `json:"sslmode"`
 }
 
+// DefaultC2Provider is the only supported C2 provider for the integration.
+const DefaultC2Provider = "toshell"
+
+// C2Config controls the optional Toshell C2 adapter. The adapter is disabled by
+// default and APIKeyRef must always be a secret reference, never the key itself.
+type C2Config struct {
+	Enabled      bool   `json:"enabled"`
+	Provider     string `json:"provider"`
+	BaseURL      string `json:"base_url"`
+	APIKeyRef    string `json:"api_key_ref"`
+	AllowConfirm bool   `json:"allow_confirm"`
+	AllowDanger  bool   `json:"allow_danger"`
+}
+
 // Config is the on-disk config file shape.
 type Config struct {
 	Database Database `json:"database"`
 	SkillDir string   `json:"skill_dir"`
+	C2       C2Config `json:"c2"`
 }
 
 // BaseDir is the directory that anchors all runtime artifacts (config.json and
@@ -106,6 +121,28 @@ func Load() Config {
 	}
 	_ = json.Unmarshal(b, &c)
 	return c
+}
+
+// EffectiveC2 applies fail-closed defaults. In particular, a missing provider
+// resolves to Toshell while the adapter and every write tier remain disabled.
+func (c Config) EffectiveC2() C2Config {
+	c2 := c.C2
+	if strings.TrimSpace(c2.Provider) == "" {
+		c2.Provider = DefaultC2Provider
+	}
+	if c2.Provider != DefaultC2Provider {
+		c2.Enabled = false
+		c2.AllowConfirm = false
+		c2.AllowDanger = false
+	}
+	if !c2.Enabled {
+		c2.AllowConfirm = false
+		c2.AllowDanger = false
+	}
+	if !c2.AllowConfirm {
+		c2.AllowDanger = false
+	}
+	return c2
 }
 
 // SkillDir returns the skill root directory with precedence:

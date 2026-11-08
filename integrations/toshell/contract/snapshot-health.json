@@ -1,0 +1,10 @@
+{
+  "config_reload": {
+    "at": "\u003ccaptured-at\u003e",
+    "attempts": 1,
+    "failures": 0,
+    "ok": true
+  },
+  "status": "ok",
+  "timestamp": "\u003ccaptured-at\u003e"
+}

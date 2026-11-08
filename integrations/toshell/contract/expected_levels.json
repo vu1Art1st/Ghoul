@@ -1,0 +1,46 @@
+{
+  "read": [
+    "attack_suggest",
+    "intel_query",
+    "playbook_status",
+    "plugin_list",
+    "result_read",
+    "session_context",
+    "session_list",
+    "task_result",
+    "task_wait",
+    "tool_download_status",
+    "tool_list",
+    "tunnel_list",
+    "web_search"
+  ],
+  "confirm": [
+    "check_av",
+    "env_vars",
+    "file_download",
+    "file_list",
+    "net_connections",
+    "net_info",
+    "process_list",
+    "scheduled_tasks",
+    "screenshot",
+    "service_list",
+    "system_info",
+    "tunnel_start",
+    "tunnel_stop",
+    "user_info"
+  ],
+  "danger": [
+    "credentials",
+    "delegate",
+    "exec",
+    "fileless_exec",
+    "plugin_load",
+    "plugin_upload",
+    "process_kill",
+    "remote_download",
+    "run_command",
+    "session_kill",
+    "task_submit"
+  ]
+}

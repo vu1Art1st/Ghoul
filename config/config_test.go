@@ -40,3 +40,66 @@ func TestPostgresDSNPrecedence(t *testing.T) {
 		t.Fatalf("file dsn verbatim, got %q err %v", got, err)
 	}
 }
+
+func TestC2DefaultsFailClosed(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"database":{"dsn":"postgres://example/db"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ARTEX_CONFIG", cfgPath)
+
+	got := Load().EffectiveC2()
+	if got.Provider != DefaultC2Provider {
+		t.Fatalf("provider = %q, want %q", got.Provider, DefaultC2Provider)
+	}
+	if got.Enabled || got.AllowConfirm || got.AllowDanger {
+		t.Fatalf("C2 defaults must be disabled: %+v", got)
+	}
+}
+
+func TestC2UnknownProviderDisablesWriteTiers(t *testing.T) {
+	cfg := Config{C2: C2Config{
+		Enabled:      true,
+		Provider:     "other",
+		AllowConfirm: true,
+		AllowDanger:  true,
+	}}
+	got := cfg.EffectiveC2()
+	if got.Enabled || got.AllowConfirm || got.AllowDanger {
+		t.Fatalf("unknown provider must fail closed: %+v", got)
+	}
+}
+
+func TestC2DangerRequiresConfirm(t *testing.T) {
+	cfg := Config{C2: C2Config{
+		Enabled:     true,
+		Provider:    DefaultC2Provider,
+		AllowDanger: true,
+	}}
+	got := cfg.EffectiveC2()
+	if got.AllowDanger {
+		t.Fatalf("danger must stay disabled without confirm: %+v", got)
+	}
+}
+
+func TestC2ExplicitReadOnlyEnable(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	body := `{"database":{"dsn":"postgres://example/db"},"c2":{"enabled":true,"provider":"toshell","base_url":"http://127.0.0.1:18081","api_key_ref":"env:TOSHELL_API_KEY"}}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ARTEX_CONFIG", cfgPath)
+
+	got := Load().EffectiveC2()
+	if !got.Enabled || got.Provider != DefaultC2Provider {
+		t.Fatalf("explicit read-only enable not preserved: %+v", got)
+	}
+	if got.AllowConfirm || got.AllowDanger {
+		t.Fatalf("write tiers must remain disabled: %+v", got)
+	}
+	if got.APIKeyRef != "env:TOSHELL_API_KEY" {
+		t.Fatalf("secret reference = %q", got.APIKeyRef)
+	}
+}

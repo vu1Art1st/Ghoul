@@ -1,0 +1,212 @@
+{
+  "version": 1,
+  "max_tools": 8,
+  "schema_token_budget": 2000,
+  "output_token_budget": 4000,
+  "planner_default": [
+    "c2_session_list",
+    "c2_session_context",
+    "c2_recon"
+  ],
+  "tools": [
+    {
+      "name": "c2_session_list",
+      "description": "列出已绑定到当前任务的 Toshell 会话；只读，不向目标下发动作。",
+      "level": "read",
+      "source_tools": [
+        "session_list"
+      ],
+      "planner": true,
+      "worker": true,
+      "parameters": {},
+      "additional_properties": false,
+      "output_token_budget": 4000
+    },
+    {
+      "name": "c2_session_context",
+      "description": "读取一个已绑定会话的身份、状态和近期任务摘要。",
+      "level": "read",
+      "source_tools": [
+        "session_context"
+      ],
+      "planner": true,
+      "worker": true,
+      "required": [
+        "session_id"
+      ],
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "description": "已绑定到当前任务的 Toshell 会话 ID。"
+        }
+      },
+      "additional_properties": false,
+      "output_token_budget": 4000
+    },
+    {
+      "name": "c2_recon",
+      "description": "在已绑定会话执行白名单只读侦察动作，禁止任意命令。",
+      "level": "read",
+      "source_tools": [
+        "exec"
+      ],
+      "planner": true,
+      "worker": true,
+      "required": [
+        "session_id",
+        "action"
+      ],
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "description": "已绑定到当前任务的 Toshell 会话 ID。"
+        },
+        "action": {
+          "type": "string",
+          "description": "只读动作。",
+          "enum": [
+            "user_info",
+            "system_info",
+            "net_info",
+            "net_connections",
+            "env_vars",
+            "scheduled_tasks"
+          ]
+        }
+      },
+      "additional_properties": false,
+      "output_token_budget": 4000
+    },
+    {
+      "name": "c2_file_list",
+      "description": "列出已绑定会话中的目录内容，必须通过 Confirm 策略。",
+      "level": "confirm",
+      "source_tools": [
+        "file_list"
+      ],
+      "planner": false,
+      "worker": true,
+      "required": [
+        "session_id",
+        "path"
+      ],
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "description": "已绑定到当前任务的 Toshell 会话 ID。"
+        },
+        "path": {
+          "type": "string",
+          "description": "目标系统上的绝对目录路径。"
+        }
+      },
+      "additional_properties": false,
+      "output_token_budget": 4000
+    },
+    {
+      "name": "c2_process_list",
+      "description": "列出已绑定会话中的进程，必须通过 Confirm 策略。",
+      "level": "confirm",
+      "source_tools": [
+        "process_list"
+      ],
+      "planner": false,
+      "worker": true,
+      "required": [
+        "session_id"
+      ],
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "description": "已绑定到当前任务的 Toshell 会话 ID。"
+        }
+      },
+      "additional_properties": false,
+      "output_token_budget": 4000
+    },
+    {
+      "name": "c2_screenshot",
+      "description": "采集已绑定会话的屏幕截图，必须通过 Confirm 策略。",
+      "level": "confirm",
+      "source_tools": [
+        "screenshot"
+      ],
+      "planner": false,
+      "worker": true,
+      "required": [
+        "session_id"
+      ],
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "description": "已绑定到当前任务的 Toshell 会话 ID。"
+        }
+      },
+      "additional_properties": false,
+      "output_token_budget": 4000
+    },
+    {
+      "name": "c2_exec",
+      "description": "在已绑定会话执行任意命令；Danger 级，必须一次性审批。",
+      "level": "danger",
+      "source_tools": [
+        "exec"
+      ],
+      "planner": false,
+      "worker": true,
+      "required": [
+        "session_id",
+        "command"
+      ],
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "description": "已绑定到当前任务的 Toshell 会话 ID。"
+        },
+        "command": {
+          "type": "string",
+          "description": "待审批的命令原文。"
+        }
+      },
+      "additional_properties": false,
+      "output_token_budget": 4000
+    },
+    {
+      "name": "c2_tunnel",
+      "description": "查看、启动或停止已绑定会话的隧道；写操作必须审批。",
+      "level": "confirm",
+      "source_tools": [
+        "tunnel_list",
+        "tunnel_start",
+        "tunnel_stop"
+      ],
+      "planner": false,
+      "worker": true,
+      "required": [
+        "session_id",
+        "action"
+      ],
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "description": "已绑定到当前任务的 Toshell 会话 ID。"
+        },
+        "action": {
+          "type": "string",
+          "description": "隧道动作。",
+          "enum": [
+            "list",
+            "start",
+            "stop"
+          ]
+        },
+        "local_port": {
+          "type": "integer",
+          "description": "start 时使用的服务端本地端口。"
+        }
+      },
+      "additional_properties": false,
+      "output_token_budget": 4000
+    }
+  ]
+}

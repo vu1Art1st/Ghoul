@@ -1,13 +1,14 @@
 <div align="center">
 
-# ARTEX
+# Ghoul
 
 AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 
+> **Ghoul** 之名取自《东京喰种》中的“喰种”：不断吸收其他优秀项目中符合个人需求的功能，将其化为自身能力，在持续进化中变得更强。
 
 🌐 **在线 Demo（模拟数据）**： [https://artex-demo.mhtsec.com](https://artex-demo.mhtsec.com)
 
-📦 **该仓库为ARTEX最后一个版本纯源码备份。原 Docker 镜像源 `autumn27/artex` 已失效，现由本仓库自维护镜像 `mianhuatang11/artex`（Docker Hub）；拉取失败时可 `docker compose build` 从纯源码本地构建，无任何外部预编译依赖。**
+📦 **Ghoul 由 ARTEX 演进而来，现为独立仓库：[vu1Art1st/Ghoul](https://github.com/vu1Art1st/Ghoul)。原 Docker 镜像源 `autumn27/artex` 已失效，现由本仓库维护为 `mianhuatang11/artex`；Docker Hub 拉取失败时，用 `docker compose build` 从源码本地构建，无需任何外部预构建产物。**
 
 </div>
 
@@ -71,8 +72,8 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 ### 方式一：一键安装脚本（推荐）
 
 ```bash
-git clone https://github.com/mhtsec/ARTEX.git
-cd ARTEX
+git clone https://github.com/vu1Art1st/Ghoul.git
+cd Ghoul
 ./install.sh
 ```
 
@@ -86,8 +87,8 @@ cd ARTEX
 ### 方式二：Docker Compose（手动）
 
 ```bash
-git clone https://github.com/mhtsec/ARTEX.git
-cd ARTEX
+git clone https://github.com/vu1Art1st/Ghoul.git
+cd Ghoul
 cp .env.example .env          # 填 POSTGRES_PASSWORD、可选 ANTHROPIC_API_KEY
 docker compose up -d          # 拉取 mianhuatang11/artex 镜像 + postgres
 # → http://localhost:8787
@@ -166,7 +167,7 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 ### 方式二：一键更新脚本
 
 ```bash
-cd ARTEX
+cd Ghoul
 ./update.sh
 ```
 
@@ -178,7 +179,7 @@ cd ARTEX
 ### 方式三：Docker Compose（手动）
 
 ```bash
-cd ARTEX
+cd Ghoul
 git pull                       # 更新 compose / 脚本（可选）
 # 指定版本：在 .env 设 ARTEX_TAG=v0.2.0；不设则用 latest
 docker compose pull artex
@@ -227,6 +228,34 @@ CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
 **并发**：每个任务的 work agent 数在「系统设置」里配置（默认 3）。
 
 **常用参数**：`./start.sh -addr :8787 -proxy :8788`（`-addr` 前端+API，`-proxy` 流量录制代理）。启动脚本会把参数原样透传给 `artex`。
+
+### Toshell C2 集成（Phase 0）
+
+Ghoul 将 Toshell 作为唯一 C2 后端，但两者保持独立进程和独立数据库。Phase 0 已冻结 Toshell `v1.4.3`（commit `8bf4643c1affbe109993123475422f6d26897903`）的 REST 契约，不复制 Toshell 源码，也不在 Ghoul 页面中 iframe 嵌入其控制台。
+
+```json
+{
+  "c2": {
+    "enabled": false,
+    "provider": "toshell",
+    "base_url": "http://127.0.0.1:18081",
+    "api_key_ref": "env:TOSHELL_API_KEY",
+    "allow_confirm": false,
+    "allow_danger": false
+  }
+}
+```
+
+- C2 默认关闭；未知 provider、关闭适配器或未开启 Confirm 时，写入能力会自动收敛为关闭。
+- `api_key_ref` 只能是 secret reference，禁止填写 Toshell API Key 明文。
+- 已保存 `/api/v1/health`、`/api/v1/mcp/tools`、`/api/v1/sessions` 契约快照，并验证 sidecar 健康检查。
+- Toshell 全量 38 个工具估算为 `10,705` tokens（含安全余量 `13,917`）；Ghoul 只暴露 8 个原生 `c2_*` 工具，估算 `955` tokens（含安全余量 `1,242`，预算 `2,000`）。
+- Planner 默认只加载 `c2_session_list`、`c2_session_context`、`c2_recon` 三个只读工具。
+- Ghoul UI 负责会话查看/绑定、审批、常用操作和证据；载荷构建、监听器高级配置、插件、AV-Ops、BYOVD/EDR/PPL、驱动和注入保留在 Toshell 控制台。
+
+接入说明、sidecar 模板、快照刷新和契约测试见 [`integrations/toshell/README.md`](integrations/toshell/README.md)。本轮新增与修改的 Ghoul 代码继续按 AGPL-3.0 发布；Toshell 仍为 MIT，未将其源码纳入 Ghoul 二进制。
+
+> Phase 0 测试记录：`go test ./config ./integrations/toshell/...` 通过。全仓基线中，除 `server` 包依赖本机 PostgreSQL 配置以及 4 个既有 Windows 路径分隔符断言外，其余包通过；这些既有环境/平台问题不属于本次 C2 改动。
 
 ### 反向代理部署（HTTPS / 只开放 443）
 
@@ -471,12 +500,6 @@ flowchart TB
 
 </div>
 
----
-## 参考
-
-https://github.com/oritera/Cairn
-
-
 ## 许可与免责声明
 
 ### 开源协议
@@ -508,3 +531,26 @@ https://github.com/oritera/Cairn
 ### 免责声明
 
 本项目按“现状（AS IS）”提供，不附带任何明示或默示的担保。作者及贡献者不对使用本工具（无论使用方式是否得当）所导致的任何直接或间接损失、数据丢失、系统损坏或法律纠纷承担责任。**下载、安装或使用本项目，即表示你已阅读、理解并同意上述全部条款。**
+
+---
+
+## 参考项目与来源声明
+
+以下项目统一作为 Ghoul 的来源、对照或演进参考列出；具体代码吸收按合并计划和对应工作包逐项记录，未复制项目的许可证以各自仓库为准。
+
+- [Ghoul](https://github.com/vu1Art1st/Ghoul)：本仓库，AGPL-3.0。
+- [ARTEX](https://github.com/Autumn-27/ARTEX)：Ghoul 的上游演进基础，AGPL-3.0。
+- [ARTEX-main](https://github.com/sharenjun/ARTEX-main)：可靠性、Planner handoff、完成审计、Worker 池和 Repeater 参考。
+- [Pojun](https://github.com/chu0119/Pojun)：漏洞情报、证据硬闸、意图预算、DOCX 报告和 Skill 参考。
+- [artex-ymh](https://github.com/panda0x123/artex-ymh)：LLM 墙钟、deadline、chains、RoE、伪装门控和 doctor 参考。
+- [artex-ld](https://github.com/IcebergN2026/artex-ld)：意图审核、场景模板、Finding 派发和证据版本参考。
+- [RuoJi6/ARTEX](https://github.com/RuoJi6/ARTEX)：Basic Auth、日历任务、代理池、Egress Probe 和 Finding 归并参考。
+- [Toshell](https://github.com/iQingshan/Toshell)：唯一 C2 后端，锁定 `v1.4.3 / 8bf4643`，MIT。
+- [ScopeSentry](https://github.com/Autumn-27/ScopeSentry)：资产同步参考。
+- [AegisHook](https://github.com/RuoJi6/AegisHook)：审批详情组件展示结构参考。
+- [norma](https://github.com/Autumn-27/norma)：Agent SDK 来源；上游已转为闭源，本仓库使用恢复后的 `v0.4.3` 模块。
+- [Cairn](https://github.com/oritera/Cairn)：架构与交互参考。
+
+### AGPL 来源与修改说明
+
+Ghoul 的修改、分发和网络部署继续适用 AGPL-3.0。Toshell 通过独立 sidecar 和 REST 集成，本轮没有复制、修改或静态链接 Toshell 源码；契约快照仅记录公开 API 响应。若后续复制或修改 Toshell 代码，必须保留其 MIT notice，并在本文件、发布说明和对应源文件中记录变更与日期。

@@ -1,0 +1,25 @@
+{
+  "source": {
+    "project": "Toshell",
+    "version": "v1.4.3",
+    "commit": "8bf4643c1affbe109993123475422f6d26897903",
+    "license": "MIT"
+  },
+  "estimator": "CJK rune = 1 token; other rune = 1/4 token; rounded up; 1.3 safety factor",
+  "safety_factor": 1.3,
+  "full_toshell": {
+    "tool_count": 38,
+    "json_bytes": 36729,
+    "estimated_tokens": 10705,
+    "estimated_tokens_with_safety": 13917
+  },
+  "ghoul_native_surface": {
+    "tool_count": 8,
+    "json_bytes": 3508,
+    "estimated_tokens": 955,
+    "estimated_tokens_with_safety": 1242
+  },
+  "schema_token_budget": 2000,
+  "output_token_budget": 4000,
+  "surface_under_budget": true
+}

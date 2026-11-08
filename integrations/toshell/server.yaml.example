@@ -1,0 +1,66 @@
+# Ghoul x Toshell Phase 0 sidecar template.
+# Copy this file to a secret-managed location and replace every placeholder.
+# Do not commit the generated API key or JWT key.
+
+server:
+  host: 127.0.0.1
+  port: 18081
+  api_host: 127.0.0.1
+  api_port: 18081
+  trust_proxy_headers: false
+
+listener:
+  # Phase 0 only verifies the REST control plane. Enable and network-isolate the
+  # listener only when a real authorized exercise begins.
+  enabled: false
+  host: 0.0.0.0
+  port: 8080
+  protocol: tcp
+  encryption_key: replace-with-32-byte-random-value
+  public_host: 127.0.0.1
+
+auth:
+  enabled: true
+  admin_username: admin
+  admin_password: replace-with-a-strong-password
+  jwt_enabled: true
+  jwt_key: replace-with-a-random-jwt-key
+  api_key_enabled: true
+  api_keys:
+    - replace-with-a-random-api-key
+
+database:
+  type: sqlite
+  path: ./data/toshell.db
+
+logging:
+  level: info
+  format: json
+  output: stdout
+
+web:
+  basic_auth_enabled: true
+  basic_auth_user: toshell
+  basic_auth_password: replace-with-a-strong-basic-auth-password
+  unauth_mode: basic
+  allow_cidrs:
+    - 127.0.0.1/32
+
+ai:
+  enabled: false
+
+mcp:
+  enabled: false
+  bind: 127.0.0.1:18082
+  token: ""
+  allowed_tools: []
+  fail_closed: true
+
+avops:
+  allow_l2: false
+  allow_l3: false
+  allow_l4: false
+  require_confirm: true
+
+task:
+  output_max_bytes: 262144

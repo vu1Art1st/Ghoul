@@ -1,0 +1,10 @@
+{
+  "project": "Toshell",
+  "version": "v1.4.3",
+  "commit": "8bf4643c1affbe109993123475422f6d26897903",
+  "upstream": "https://github.com/iQingshan/Toshell",
+  "license": "MIT",
+  "captured_at": "2026-11-07",
+  "config_template": "integrations/toshell/server.yaml.example",
+  "integration_method": "REST sidecar; no Toshell source vendored"
+}
