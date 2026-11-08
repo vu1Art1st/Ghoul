@@ -1356,6 +1356,121 @@ CREATE TABLE IF NOT EXISTS vuln_sync_state (
 );
 
 -- =====================================================================
+-- M3. Toshell C2 只读同步与绑定
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS c2_instances (
+    id             BIGSERIAL PRIMARY KEY,
+    name           TEXT NOT NULL DEFAULT 'toshell',
+    base_url       TEXT NOT NULL,
+    mcp_url        TEXT NOT NULL DEFAULT '',
+    version        TEXT NOT NULL DEFAULT '',
+    commit         TEXT NOT NULL DEFAULT '',
+    api_key_ref    TEXT NOT NULL DEFAULT '',
+    enabled        BOOLEAN NOT NULL DEFAULT false,
+    status         TEXT NOT NULL DEFAULT 'disabled',
+    last_health_at TIMESTAMPTZ,
+    last_sync_at   TIMESTAMPTZ,
+    health_json    JSONB NOT NULL DEFAULT '{}',
+    channels_json  JSONB NOT NULL DEFAULT '{}',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (base_url)
+);
+
+CREATE TABLE IF NOT EXISTS c2_sessions (
+    id                 BIGSERIAL PRIMARY KEY,
+    instance_id        BIGINT NOT NULL REFERENCES c2_instances(id) ON DELETE CASCADE,
+    external_session_id TEXT NOT NULL,
+    hostname           TEXT NOT NULL DEFAULT '',
+    username           TEXT NOT NULL DEFAULT '',
+    os                 TEXT NOT NULL DEFAULT '',
+    arch               TEXT NOT NULL DEFAULT '',
+    remote_addr        TEXT NOT NULL DEFAULT '',
+    listener_id        TEXT NOT NULL DEFAULT '',
+    status             TEXT NOT NULL DEFAULT '',
+    capabilities_json  JSONB NOT NULL DEFAULT '[]',
+    last_seen_at       TIMESTAMPTZ,
+    raw_hash           TEXT NOT NULL DEFAULT '',
+    raw_json           JSONB NOT NULL DEFAULT '{}',
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (instance_id, external_session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_c2_sessions_status ON c2_sessions(instance_id, status, last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS c2_session_bindings (
+    id             BIGSERIAL PRIMARY KEY,
+    c2_session_id  BIGINT NOT NULL REFERENCES c2_sessions(id) ON DELETE CASCADE,
+    task_id        BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    asset_id       BIGINT REFERENCES assets(id) ON DELETE SET NULL,
+    company_id     BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    binding_reason TEXT NOT NULL DEFAULT '',
+    bound_by       TEXT NOT NULL DEFAULT 'human',
+    bound_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at     TIMESTAMPTZ,
+    active         BOOLEAN NOT NULL DEFAULT true
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_c2_binding_active_session
+    ON c2_session_bindings(c2_session_id) WHERE active;
+CREATE INDEX IF NOT EXISTS idx_c2_binding_task ON c2_session_bindings(task_id, active);
+
+CREATE TABLE IF NOT EXISTS c2_tasks (
+    id                 BIGSERIAL PRIMARY KEY,
+    instance_id        BIGINT NOT NULL REFERENCES c2_instances(id) ON DELETE CASCADE,
+    external_task_id   BIGINT NOT NULL,
+    external_session_id TEXT NOT NULL,
+    task_type          TEXT NOT NULL DEFAULT '',
+    command            TEXT NOT NULL DEFAULT '',
+    status             TEXT NOT NULL DEFAULT '',
+    exit_code          INTEGER NOT NULL DEFAULT 0,
+    output_summary     TEXT NOT NULL DEFAULT '',
+    output_sha256      TEXT NOT NULL DEFAULT '',
+    created_at_ext     TIMESTAMPTZ,
+    completed_at       TIMESTAMPTZ,
+    raw_json           JSONB NOT NULL DEFAULT '{}',
+    synced_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (instance_id, external_task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_c2_tasks_session ON c2_tasks(external_session_id, created_at_ext DESC);
+
+CREATE TABLE IF NOT EXISTS c2_listeners (
+    id                  BIGSERIAL PRIMARY KEY,
+    instance_id         BIGINT NOT NULL REFERENCES c2_instances(id) ON DELETE CASCADE,
+    external_listener_id TEXT NOT NULL,
+    name                TEXT NOT NULL DEFAULT '',
+    type                TEXT NOT NULL DEFAULT '',
+    protocol            TEXT NOT NULL DEFAULT '',
+    bind_addr           TEXT NOT NULL DEFAULT '',
+    bind_port           INTEGER NOT NULL DEFAULT 0,
+    public_addr         TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL DEFAULT '',
+    connections         INTEGER NOT NULL DEFAULT 0,
+    raw_json            JSONB NOT NULL DEFAULT '{}',
+    synced_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (instance_id, external_listener_id)
+);
+
+CREATE TABLE IF NOT EXISTS c2_events (
+    id          BIGSERIAL PRIMARY KEY,
+    instance_id BIGINT NOT NULL REFERENCES c2_instances(id) ON DELETE CASCADE,
+    event_key   TEXT NOT NULL,
+    event_type  TEXT NOT NULL,
+    event_time  TIMESTAMPTZ,
+    payload     JSONB NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (instance_id, event_key)
+);
+CREATE INDEX IF NOT EXISTS idx_c2_events_time ON c2_events(instance_id, event_time DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS c2_event_cursor (
+    instance_id    BIGINT PRIMARY KEY REFERENCES c2_instances(id) ON DELETE CASCADE,
+    last_event_id  TEXT NOT NULL DEFAULT '',
+    last_event_at  TIMESTAMPTZ,
+    last_resync_at TIMESTAMPTZ,
+    status         TEXT NOT NULL DEFAULT 'disconnected'
+);
+
+-- =====================================================================
 -- M. 后端日志持久化
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS server_logs (

@@ -288,6 +288,19 @@ Phase 2 在现有 `findings` 主表上统一了发现、证据、验证、复测
 
 验证：`go test ./vulnintel ./report ./findingverify ./agent ./db`、后端编译和 `pnpm exec tsc --noEmit` 通过。来源包括 Pojun、ARTEX-main、artex-ymh、artex-ld、RuoJi6/ARTEX；本轮新增与修改代码继续按 AGPL-3.0 发布，Toshell 仍保持独立 MIT sidecar 边界。
 
+### C2 只读接入（Phase 3）
+
+Phase 3 通过独立 Toshell REST/WS 客户端完成只读接入，Toshell 仍是唯一 C2 后端，Ghoul 不复制其源码、不暴露 API Key，也不把 38 个原始 MCP 工具注册给 Agent。
+
+- **REST 客户端**：支持 `health`、`sessions`、`tasks`、`listeners`、`channels/health`，API Key 只接受 `env:` / `file:` secret reference，GET 请求带有限重试，写接口不进入只读客户端。
+- **同步与恢复**：启动后全量对账；30 秒周期对账；消费 `/api/v1/ws/events` 的 `session_online`、`session_offline`、`task_completed`、`task_failed`；WS 断线后保留最后事件键并全量对账，避免重复事件和孤儿状态。
+- **会话绑定**：`c2_sessions`、`c2_session_bindings`、`c2_event_cursor`、`c2_events`、`c2_tasks`、`c2_listeners` 持久化到 PostgreSQL；未绑定会话不会出现在 Worker 的 C2 工具面。
+- **只读页面**：`/function/c2` 展示实例健康、会话、监听器、任务摘要、事件和任务/资产绑定；不 iframe 嵌入 Toshell 控制台。
+- **Planner 工具面**：`c2_session_list`、`c2_session_context`、`c2_recon` 以 deferred host tool 加载；Planner 默认 3 个，Worker 仅在任务已有绑定会话时获得同一裁剪面。`c2_recon` 在 Phase 3 只返回白名单动作和现有摘要，不创建 Toshell 任务。
+- **Token 基线**：Planner 只读 3 工具 schema 为 `327` tokens（含 1.3 安全余量 `426`），低于 `2,000` schema 预算；记录见 [`integrations/toshell/contract/phase3_readonly_baseline.json`](integrations/toshell/contract/phase3_readonly_baseline.json)。
+
+验证：`go test ./integrations/toshell/client ./integrations/toshell/contract`、后端编译和 `pnpm exec tsc --noEmit` 通过。Phase 3 不执行 Confirm/Danger 操作；审批式操作和证据物化在 Phase 4 落地。来源包括 Toshell、ARTEX-main、Pojun、artex-ymh、artex-ld、RuoJi6/ARTEX；Toshell 仍为独立 MIT sidecar，未纳入 Ghoul 二进制。
+
 ### 反向代理部署（HTTPS / 只开放 443）
 
 前端和 API/SSE 都由同一个后端端口（默认 `:8787`）提供，实时活动流默认走**同源**地址，因此**无需配置 `NEXT_PUBLIC_SSE_BASE`**，公网只开放 443、把 8787 留在内网即可。

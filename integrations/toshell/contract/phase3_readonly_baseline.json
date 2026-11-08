@@ -1,0 +1,17 @@
+{
+  "phase": 3,
+  "scope": "planner_readonly",
+  "tools": [
+    "c2_session_list",
+    "c2_session_context",
+    "c2_recon"
+  ],
+  "tool_count": 3,
+  "json_bytes": 1205,
+  "estimated_tokens": 327,
+  "estimated_tokens_with_safety": 426,
+  "schema_token_budget": 2000,
+  "output_token_budget": 4000,
+  "under_budget": true,
+  "loading": "deferred host tools; schema withheld until C2 is enabled and the planner is bound"
+}

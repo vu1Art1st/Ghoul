@@ -231,17 +231,17 @@ flowchart LR
 
 预计：2 周。
 
-- [ ] 新增 `integrations/toshell/client` REST 客户端。
-- [ ] 新增 `c2_instances`、`c2_sessions`、`c2_session_bindings`、`c2_event_cursor`。
-- [ ] 同步 Toshell `/sessions`、`/tasks`、`/listeners`、`/channels/health`。
-- [ ] 接入 Toshell `/api/v1/ws/events`，处理 `session_online`、`session_offline`、`task_completed`、`task_failed`。
-- [ ] 支持事件断点恢复和全量对账。
-- [ ] C2 session 与 Ghoul asset/task 绑定。
-- [ ] 新增 Ghoul C2 只读页面：实例健康、会话、监听器、绑定关系、事件。
-- [ ] Planner 默认只加载 3 个只读 C2 工具。
-- [ ] Worker 按任务阶段加载裁剪后的 C2 工具，不加载全部 38 个工具。
-- [ ] 使用 deferred/skill-gated 方式加载 C2 工具。
-- [ ] 记录只读接入后的 token 基线。
+- [x] 新增 `integrations/toshell/client` REST 客户端。
+- [x] 新增 `c2_instances`、`c2_sessions`、`c2_session_bindings`、`c2_event_cursor`。
+- [x] 同步 Toshell `/sessions`、`/tasks`、`/listeners`、`/channels/health`。
+- [x] 接入 Toshell `/api/v1/ws/events`，处理 `session_online`、`session_offline`、`task_completed`、`task_failed`。
+- [x] 支持事件断点恢复和全量对账。
+- [x] C2 session 与 Ghoul asset/task 绑定。
+- [x] 新增 Ghoul C2 只读页面：实例健康、会话、监听器、绑定关系、事件。
+- [x] Planner 默认只加载 3 个只读 C2 工具。
+- [x] Worker 按任务阶段加载裁剪后的 C2 工具，不加载全部 38 个工具。
+- [x] 使用 deferred/skill-gated 方式加载 C2 工具。
+- [x] 记录只读接入后的 token 基线。
 
 退出条件：
 
@@ -895,6 +895,7 @@ mcp:
 - [ ] Phase 0 退出：清理既有 PostgreSQL 测试环境与 Windows 路径断言后，全仓测试通过。
 - [x] Phase 1 可靠性基础验收。
 - [x] Phase 2 证据与漏洞闭环验收。
+- [x] Phase 3 C2 只读接入验收。
 
 ### Phase 0 检查清单
 
@@ -928,14 +929,14 @@ mcp:
 
 ### Phase 3 检查清单
 
-- [ ] C2 REST 客户端。
-- [ ] session 同步。
-- [ ] 事件消费。
-- [ ] 资产绑定。
-- [ ] C2 只读 UI。
-- [ ] Planner 只加载 3 个只读 C2 工具。
-- [ ] deferred/skill-gated 工具加载。
-- [ ] 只读接入 token 基线。
+- [x] C2 REST 客户端。
+- [x] session 同步。
+- [x] 事件消费。
+- [x] 资产绑定。
+- [x] C2 只读 UI。
+- [x] Planner 只加载 3 个只读 C2 工具。
+- [x] deferred/skill-gated 工具加载。
+- [x] 只读接入 token 基线。
 
 ### Phase 4 检查清单
 

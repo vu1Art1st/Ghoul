@@ -124,6 +124,20 @@ Ghoul 原生工具面的 schema 预算为 `2,000` tokens，单次工具输出内
 
 禁止 iframe。高级操作使用新窗口深链接，避免 CSP、SSO、Cookie、WebSocket 和权限状态耦合。
 
+## Phase 3 只读接入
+
+Phase 3 已接入服务端 REST/WS 客户端和 Ghoul 原生只读页面：
+
+- 新增 `integrations/toshell/client`，只实现 GET 读取；API Key 支持 `env:NAME` 与 `file:PATH`，明文引用直接拒绝。
+- 同步 `/api/v1/sessions`、`/api/v1/tasks`、`/api/v1/listeners`、`/api/v1/channels/health` 和 `/api/v1/health`。
+- 消费 `/api/v1/ws/events`；保存 `c2_event_cursor`，断线后保留最后事件键，再执行全量对账。Toshell WS 没有可回放的事件 ID，因此断线期间事件以全量对账收敛。
+- Ghoul API：`/api/c2/health`、`/api/c2/instances`、`/api/c2/sessions`、`/api/c2/listeners`、`/api/c2/tasks`、`/api/c2/events`，以及会话绑定/解绑。
+- UI：`/function/c2` 展示实例健康、会话、监听器、任务摘要、事件和绑定关系。
+- Planner 只读工具：`c2_session_list`、`c2_session_context`、`c2_recon`。Worker 只有在任务已有 active binding 时才获得同一裁剪面；未进入 C2 阶段不加载。
+- `c2_recon` 在 Phase 3 只读返回白名单动作和已有任务摘要，不创建任务。Confirm/Danger 操作留给 Phase 4。
+
+只读工具面基线：3 个工具，1,205 JSON bytes，327 estimated tokens，含 1.3 安全余量 426 tokens；见 [`contract/phase3_readonly_baseline.json`](contract/phase3_readonly_baseline.json)。
+
 ## Phase 0 验证记录
 
 - 集成分支：`codex/ghoul-toshell-integration`

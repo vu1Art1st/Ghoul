@@ -47,6 +47,7 @@ type Server struct {
 	jwtKey    []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
 	basicAuth basicAuthGate
 	vulnIntel *vulnIntelService
+	c2        *c2Service
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -161,6 +162,10 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		s.vulnIntel = newVulnIntelService(m.pg, dataDir)
 		s.vulnIntel.wireAgentTools()
 		go s.vulnIntel.Run(ctx)
+		if c2 := newC2Service(m.pg); c2 != nil {
+			s.c2 = c2
+			c2.start(ctx)
+		}
 	}
 	// 熔断阈值/冷却是失败路径上的热参数，启动时把全局重试策略推给 Registry 一次；
 	// 之后每次保存策略再推一次（saveLLMRetryPolicy）。
@@ -230,6 +235,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		wireAgentAugment(m.pg, s.skillDir, s.hostTools) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
 		domainReg := buildDomainReg(m.Assets())
 		wireTools(m.pg, domainReg) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
+		s.seedC2Tools()
 		seedPrompts(m.pg)          // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
 		s.seedOrchestrationTools() // P2 跨任务编排工具 seed 进 tools 表(可按 agent 绑定)
 		if err := s.seedFindingRetester(); err != nil {
@@ -847,6 +853,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/vulnintel/sync", s.vulnintelSyncNow)
 	mux.HandleFunc("POST /api/vulnintel/cancel", s.vulnintelSyncCancel)
 	mux.HandleFunc("PATCH /api/vulnintel/config", s.vulnintelSaveConfig)
+	mux.HandleFunc("GET /api/c2/health", s.c2Status)
+	mux.HandleFunc("GET /api/c2/instances", s.c2Instances)
+	mux.HandleFunc("GET /api/c2/sessions", s.c2Sessions)
+	mux.HandleFunc("POST /api/c2/sessions/{id}/bind", s.c2BindSession)
+	mux.HandleFunc("DELETE /api/c2/sessions/{id}/bind", s.c2UnbindSession)
+	mux.HandleFunc("GET /api/c2/listeners", s.c2Listeners)
+	mux.HandleFunc("GET /api/c2/tasks", s.c2Tasks)
+	mux.HandleFunc("GET /api/c2/events", s.c2Events)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("POST /api/chat/upload", s.chatUpload) // 方式1 文件上传:落到会话/任务工作目录 uploads/

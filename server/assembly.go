@@ -247,6 +247,10 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 			byKey[t.Key] = t
 		}
 		runInfo := agent.RunInfoFrom(ctx)
+		hasC2Binding := false
+		if runInfo.TaskID > 0 {
+			hasC2Binding, _ = pg.HasActiveC2Binding(ctx, runInfo.TaskID)
+		}
 		resolve := func(t actool.CoreTool, row *db.Tool) actool.CoreTool {
 			var schema map[string]any
 			if len(row.Schema) > 0 {
@@ -263,6 +267,9 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 			}
 			if !row.Enabled || !contains(row.Agents, agentKey) {
 				continue // disabled globally or not bound to this agent → drop
+			}
+			if strings.HasPrefix(t.Name(), "c2_") && agentKey == "worker" && !hasC2Binding {
+				continue // worker C2 tools appear only after a session is bound to its task
 			}
 			out = append(out, resolve(t, row))
 		}

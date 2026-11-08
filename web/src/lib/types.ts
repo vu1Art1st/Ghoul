@@ -1753,3 +1753,93 @@ export interface VulnIntelStatus {
     hint: string;
   };
 }
+
+export interface C2Instance {
+  id: string;
+  name: string;
+  base_url: string;
+  version?: string;
+  commit?: string;
+  enabled: boolean;
+  status: string;
+  last_health_at?: string;
+  last_sync_at?: string;
+  health: Record<string, unknown>;
+  channels: Record<string, unknown>;
+}
+
+export interface C2Binding {
+  id: string;
+  c2_session_id: string;
+  task_id: string;
+  asset_id?: string;
+  company_id?: string;
+  binding_reason: string;
+  bound_by: string;
+  bound_at: string;
+  active: boolean;
+}
+
+export interface C2Session {
+  id: string;
+  instance_id: string;
+  session_id: string;
+  hostname: string;
+  username: string;
+  os: string;
+  arch: string;
+  remote_addr: string;
+  listener_id: string;
+  status: string;
+  capabilities: string[];
+  last_seen_at?: string;
+  binding?: C2Binding;
+}
+
+export interface C2Task {
+  id: string;
+  task_id: number;
+  session_id: string;
+  task_type: string;
+  command: string;
+  status: string;
+  exit_code: number;
+  output_summary: string;
+  completed_at?: string;
+}
+
+export interface C2Listener {
+  id: string;
+  listener_id: string;
+  name: string;
+  type: string;
+  protocol: string;
+  bind_addr: string;
+  bind_port: number;
+  public_addr: string;
+  status: string;
+  connections: number;
+}
+
+export interface C2Event {
+  id: string;
+  type: string;
+  event_key: string;
+  time?: string;
+  payload: Record<string, unknown>;
+}
+
+export interface C2Status {
+  enabled: boolean;
+  status: string;
+  instance?: C2Instance;
+  cursor?: {
+    last_event_id: string;
+    last_event_at?: string;
+    last_resync_at?: string;
+    status: string;
+  };
+  last_error?: string;
+  last_sync_at?: string;
+  counts?: { sessions: number; listeners: number; tasks: number };
+}

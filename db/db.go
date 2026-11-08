@@ -324,6 +324,7 @@ ON CONFLICT DO NOTHING`, r.kind, r.pattern, r.note); err != nil {
 var builtinSkillVisibility = map[string][]string{
 	"api-recon":            {"auto", "pentest", "worker"},
 	"component-vuln-intel": {"planner", "pentest", "worker"},
+	"c2-readonly":          {"planner"},
 }
 
 // seedBuiltinSkillVisibility binds the shipped built-in skills to their default

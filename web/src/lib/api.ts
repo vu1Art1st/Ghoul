@@ -19,6 +19,11 @@ import type {
   Audit,
   BatchCategoryItem,
   BatchControlItem,
+  C2Event,
+  C2Listener,
+  C2Session,
+  C2Status,
+  C2Task,
   ChatAttachment,
   CommandRecord,
   Company,
@@ -946,6 +951,27 @@ export const api = {
     if (query.limit) params.set("limit", String(query.limit));
     return get<{ items: VulnIntelHit[]; count: number }>(`/vulnintel/search?${params.toString()}`);
   },
+  c2Status: () => get<C2Status>("/c2/health"),
+  c2Sessions: (params: { task?: string; bound?: boolean; status?: string; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.task) query.set("task", params.task);
+    if (params.bound) query.set("bound", "1");
+    if (params.status) query.set("status", params.status);
+    if (params.limit) query.set("limit", String(params.limit));
+    return get<{ items: C2Session[]; count: number }>(`/c2/sessions?${query.toString()}`);
+  },
+  c2Listeners: () => get<{ items: C2Listener[]; count: number }>("/c2/listeners"),
+  c2Tasks: (sessionId?: string) =>
+    get<{ items: C2Task[]; count: number }>(
+      `/c2/tasks${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
+    ),
+  c2Events: (limit = 200) => get<{ items: C2Event[]; count: number }>(`/c2/events?limit=${limit}`),
+  bindC2Session: (
+    sessionId: string,
+    input: { task_id: number; asset_id?: number; company_id?: number; reason: string },
+  ) => post<C2Session["binding"]>(`/c2/sessions/${encodeURIComponent(sessionId)}/bind`, input),
+  unbindC2Session: (sessionId: string) =>
+    del<{ unbound: boolean }>(`/c2/sessions/${encodeURIComponent(sessionId)}/bind`),
 
   // ---- 漏洞 IM 推送 ----
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
