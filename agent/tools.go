@@ -1252,11 +1252,15 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if len(a.EvidenceHintID) > 0 && pid(a.EvidenceHintID) <= 0 {
 			return actool.Errorf("evidence_hint_id 必须为有效的提示节点 ID；无交接提示时省略"), nil
 		}
+		grade, correction := EvaluateFindingEvidence(a.VulnClass, a.Severity, a.Evidence)
+		if correction != "" {
+			return actool.Errorf(correction), nil
+		}
 		refs, err := t.findingRefsFromHint(pid(a.EvidenceHintID), a.TrafficRefs)
 		if err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		input := db.RecordFindingInput{TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs)}
+		input := db.RecordFindingInput{TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, EvidenceGrade: string(grade), AssetIDs: pidList(a.AssetIDs)}
 		var recorded *db.RecordedFinding
 		if t.findingRecorder != nil {
 			recorded, err = t.findingRecorder.Record(ctx, input, refs)
@@ -1268,13 +1272,13 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		if t.notifyFinding != nil {
+		if !recorded.Duplicate && t.notifyFinding != nil {
 			iid := input.IntentID
 			if iid <= 0 {
 				iid = t.ownerNode
 			}
 			t.notifyFinding(iid, a.Summary)
-		} else if t.notify != nil {
+		} else if !recorded.Duplicate && t.notify != nil {
 			t.notify()
 		}
 		t.writes.Findings++
@@ -1294,6 +1298,10 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			if !findingTrafficBindingEnabled() {
 				result.EvidenceNote = "漏洞已保存。Agent 自动绑定流量已关闭，可在页面人工关联流量。"
 			}
+		}
+		if recorded.Duplicate {
+			result.EvidenceStatus = "merged_duplicate"
+			result.EvidenceNote = "同任务内已存在同指纹漏洞，本次证据已合并到原记录；不要重复上报。"
 		}
 		raw, _ := json.Marshal(result)
 		return actool.Text(fmt.Sprintf("finding recorded: %d\n%s", recorded.NodeID, raw)), nil
@@ -2035,7 +2043,7 @@ func (t *ToolSet) listWorkerTraces() actool.CoreTool {
 // PlannerTools is the read + intent-generation + goal-judgement tool set.
 func (t *ToolSet) PlannerTools() []actool.CoreTool {
 	return []actool.CoreTool{
-		t.graphOverview(), t.listFindings(), t.listFacts(), t.nodeDetail(),
+		t.graphOverview(), t.listFindings(), t.searchVulns(), t.getVuln(), t.listFacts(), t.nodeDetail(),
 		// cold-digest §6.1: restore folded cold nodes (digest body → members → detail).
 		t.expandDigest(),
 		t.getWorkerOutput(), t.getWorkerTrace(), t.searchAllWorkerTraces(), t.listGoals(), t.addIntent(), t.proveGoal(), t.goalMet(),

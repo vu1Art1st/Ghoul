@@ -46,6 +46,7 @@ type Server struct {
 	skillDir  string // root directory for skill subdirectories
 	jwtKey    []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
 	basicAuth basicAuthGate
+	vulnIntel *vulnIntelService
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -157,6 +158,9 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		if err := s.basicAuth.load(m.pg); err != nil {
 			log.Printf("[auth] HTTP Basic Auth 配置加载失败，已保持关闭: %v", err)
 		}
+		s.vulnIntel = newVulnIntelService(m.pg, dataDir)
+		s.vulnIntel.wireAgentTools()
+		go s.vulnIntel.Run(ctx)
 	}
 	// 熔断阈值/冷却是失败路径上的热参数，启动时把全局重试策略推给 Registry 一次；
 	// 之后每次保存策略再推一次（saveLLMRetryPolicy）。
@@ -774,11 +778,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/findings/{id}", s.getFinding)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/lineage", s.findingLineage)
 	mux.HandleFunc("POST /api/exploration/findings/{id}/deepen", s.deepenFinding)
+	mux.HandleFunc("POST /api/exploration/findings/{id}/verify", s.verifyFinding)
+	mux.HandleFunc("POST /api/exploration/findings/{id}/dispatch", s.dispatchFinding)
+	mux.HandleFunc("GET /api/exploration/findings/{id}/evidence", s.findingEvidenceTimeline)
+	mux.HandleFunc("POST /api/exploration/findings/{id}/evidence", s.addFindingEvidence)
+	mux.HandleFunc("DELETE /api/exploration/findings/{id}/evidence/{evidenceId}", s.deleteFindingEvidence)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/retests", s.listFindingRetests)
 	mux.HandleFunc("GET /api/exploration/findings/retests/active", s.listActiveFindingRetests)
 	mux.HandleFunc("POST /api/exploration/findings/{id}/retests", s.startFindingRetest)
 	mux.HandleFunc("PATCH /api/exploration/findings/{id}", s.patchFinding)
 	mux.HandleFunc("DELETE /api/exploration/findings/{id}", s.deleteFinding)
+	mux.HandleFunc("GET /api/exploration/finding-cases", s.listFindingCases)
+	mux.HandleFunc("POST /api/exploration/finding-cases", s.mergeFindingCase)
+	mux.HandleFunc("GET /api/exploration/finding-cases/{id}", s.getFindingCase)
+	mux.HandleFunc("PATCH /api/exploration/finding-cases/{id}", s.updateFindingCase)
+	mux.HandleFunc("DELETE /api/exploration/finding-cases/{id}/members/{findingId}", s.detachFindingCaseMember)
 	mux.HandleFunc("GET /api/exploration/intents", s.intents)
 	mux.HandleFunc("GET /api/exploration/graph", s.explorationGraph)
 	mux.HandleFunc("GET /api/exploration/nodes", s.explorationNodes)
@@ -824,6 +838,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/notify/deliveries/{id}/retry", s.notifyRetryDelivery)
 	mux.HandleFunc("POST /api/settings/web-search/test", s.testWebSearch)
 	mux.HandleFunc("GET /api/report", s.getReport)
+	mux.HandleFunc("GET /api/report/docx", s.exportTaskDocx)
+	mux.HandleFunc("GET /api/exploration/findings/{id}/docx", s.exportFindingDocx)
+	mux.HandleFunc("GET /api/vulnintel/status", s.vulnintelStatus)
+	mux.HandleFunc("GET /api/vulnintel/search", s.vulnintelSearch)
+	mux.HandleFunc("GET /api/vulnintel/pocs/{cveId}", s.vulnintelPoCs)
+	mux.HandleFunc("GET /api/vulnintel/{cveId}", s.vulnintelDetail)
+	mux.HandleFunc("POST /api/vulnintel/sync", s.vulnintelSyncNow)
+	mux.HandleFunc("POST /api/vulnintel/cancel", s.vulnintelSyncCancel)
+	mux.HandleFunc("PATCH /api/vulnintel/config", s.vulnintelSaveConfig)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("POST /api/chat/upload", s.chatUpload) // 方式1 文件上传:落到会话/任务工作目录 uploads/

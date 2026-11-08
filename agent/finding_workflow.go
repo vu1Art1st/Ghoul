@@ -44,7 +44,7 @@ func findingWorkflowTools(agentKey string, tools []actool.CoreTool) ([]actool.Co
 			}
 			out = append(out, tool)
 		}
-		return out, ""
+		return out, evidenceDisciplineGuidance
 	}
 	out := append([]actool.CoreTool(nil), tools...)
 	has := map[string]bool{}
@@ -78,6 +78,9 @@ func findingWorkflowTools(agentKey string, tools []actool.CoreTool) ([]actool.Co
 	}
 	if guidance != "" || has["get_finding_traffic"] || has["update_finding_report"] {
 		guidance += findingIDGuidance
+	}
+	if guidance != "" || has["report_finding"] {
+		guidance += evidenceDisciplineGuidance
 	}
 	return out, guidance
 }

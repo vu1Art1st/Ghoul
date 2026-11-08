@@ -5,12 +5,13 @@ import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
-import { ArrowLeftIcon, ArrowUpRightIcon, ShieldAlertIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowUpRightIcon, DownloadIcon, SendIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
+import { FindingVerificationPanel } from "@/components/finding-verification-panel";
 import { Markdown } from "@/components/markdown";
 import { StatusBadge } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -111,6 +112,26 @@ function FindingDetailInner() {
     [finding, id],
   );
 
+  const exportDocx = React.useCallback(async () => {
+    try {
+      await api.exportFindingDocx(id);
+    } catch (error) {
+      toast.error("导出失败：" + (error as Error).message);
+    }
+  }, [id]);
+
+  const dispatchFinding = React.useCallback(async () => {
+    const description = window.prompt("派发说明", "基于该 Finding 的现有证据继续验证并推进利用");
+    if (!description?.trim()) return;
+    try {
+      const result = await api.dispatchFinding(id, "worker", description.trim());
+      toast.success(result.queued ? "已派发并排队" : "已派发");
+      load();
+    } catch (error) {
+      toast.error("派发失败：" + (error as Error).message);
+    }
+  }, [id, load]);
+
   if (!finding) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-10 text-center">
@@ -150,6 +171,18 @@ function FindingDetailInner() {
           {finding.inherited && finding.source_task_id && (
             <Badge variant="outline">来源任务 #{finding.source_task_id} · 只读</Badge>
           )}
+          <div className="ml-auto flex items-center gap-1">
+            <Button variant="outline" size="sm" onClick={() => void exportDocx()}>
+              <DownloadIcon />
+              DOCX
+            </Button>
+            {!finding.inherited ? (
+              <Button variant="outline" size="sm" onClick={() => void dispatchFinding()}>
+                <SendIcon />
+                派发
+              </Button>
+            ) : null}
+          </div>
         </div>
         <TabsList>
           <TabsTrigger value="overview">概览</TabsTrigger>
@@ -194,6 +227,7 @@ function FindingDetailInner() {
                 readOnly={finding.inherited}
                 onChanged={load}
               />
+              <FindingVerificationPanel key={`verification-${id}`} findingId={id} readOnly={finding.inherited} onChanged={load} />
               {/* 证据下方：详细报告(Markdown 渲染) */}
               <Card>
                 <CardHeader className="flex-row items-center justify-between">

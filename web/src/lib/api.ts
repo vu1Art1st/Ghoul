@@ -37,7 +37,11 @@ import type {
   ExplorationNodeQuery,
   Finding,
   FindingAssetTree,
+  FindingCase,
+  FindingCaseDetail,
   FindingDeepenResponse,
+  FindingEvidence,
+  FindingEvidenceTimeline,
   FindingGroupsPage,
   FindingQuery,
   FindingRetest,
@@ -102,6 +106,9 @@ import type {
   TrafficResp,
   UpdateCheck,
   UsageStats,
+  VulnIntelConfigPatch,
+  VulnIntelHit,
+  VulnIntelStatus,
   WorkspaceFile,
   WorkspaceListing,
 } from "@/lib/types";
@@ -145,6 +152,33 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (r.status === 204) return undefined as T;
   return r.json();
+}
+
+async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const token = getToken();
+  const response = await fetch(`/api${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    let message = `download: ${response.status}`;
+    try {
+      const payload = (await response.json()) as { error?: unknown };
+      if (typeof payload.error === "string" && payload.error.trim()) message = payload.error.trim();
+    } catch {
+      // Keep the status fallback for non-JSON responses.
+    }
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // sseUrl builds a URL for Server-Sent Events streams.
@@ -681,8 +715,80 @@ export const api = {
     post<{ retest: FindingRetest; created: boolean }>(`/exploration/findings/${encodeURIComponent(id)}/retests`, {
       notes,
     }),
+  findingEvidence: (id: string) =>
+    get<FindingEvidenceTimeline>(`/exploration/findings/${encodeURIComponent(id)}/evidence`),
+  addFindingEvidence: (
+    id: string,
+    input: {
+      kind: string;
+      title: string;
+      content?: string;
+      storage_ref?: string;
+      metadata?: Record<string, unknown>;
+      expected_version?: number;
+      reason: string;
+    },
+  ) =>
+    post<{ evidence: FindingEvidence; version: number }>(
+      `/exploration/findings/${encodeURIComponent(id)}/evidence`,
+      input,
+    ),
+  deleteFindingEvidence: (id: string, evidenceId: string, expected_version: number, reason: string) =>
+    del<{ deleted: boolean; version: number }>(
+      `/exploration/findings/${encodeURIComponent(id)}/evidence/${encodeURIComponent(evidenceId)}`,
+      { expected_version, reason },
+    ),
+  verifyFinding: (
+    id: string,
+    input: {
+      verdict: "verified" | "false_positive" | "inconclusive";
+      summary: string;
+      evidence: string;
+      counter_evidence: string[];
+      tags?: string[];
+      expected_version?: number;
+    },
+  ) =>
+    post<{ verified: boolean; version: number; checklist: string[]; pivot_hints: string[] }>(
+      `/exploration/findings/${encodeURIComponent(id)}/verify`,
+      input,
+    ),
+  dispatchFinding: (id: string, agent_key: string, description: string) =>
+    post<{ dispatch: unknown; intent_id: string; queued: boolean }>(
+      `/exploration/findings/${encodeURIComponent(id)}/dispatch`,
+      { agent_key, description },
+    ),
+  findingCases: (task?: string, page = 1, limit = 20) => {
+    const query = new URLSearchParams({ page: String(page), limit: String(limit) });
+    if (task) query.set("task", task);
+    return get<{ items: FindingCase[]; total: number; page: number; page_size: number }>(
+      `/exploration/finding-cases?${query.toString()}`,
+    );
+  },
+  findingCase: (id: string) =>
+    get<FindingCaseDetail>(`/exploration/finding-cases/${encodeURIComponent(id)}`),
+  mergeFindingCases: (taskId: string, findingIds: string[], title: string, reason: string) =>
+    post<FindingCase>("/exploration/finding-cases", {
+      task_id: Number(taskId),
+      finding_ids: findingIds.map(Number),
+      title,
+      reason,
+    }),
+  updateFindingCase: (
+    id: string,
+    input: { version: number; title: string; report: string; severity: Severity; reason: string },
+  ) => patch<FindingCase>(`/exploration/finding-cases/${encodeURIComponent(id)}`, input),
+  detachFindingCaseMember: (caseId: string, findingId: string, reason: string) =>
+    del<{ detached: boolean }>(
+      `/exploration/finding-cases/${encodeURIComponent(caseId)}/members/${encodeURIComponent(findingId)}`,
+      { reason },
+    ),
   deepenFinding: (id: string, description: string) =>
     post<FindingDeepenResponse>(`/exploration/findings/${id}/deepen`, { description }),
+  exportTaskDocx: (task: string) =>
+    downloadFile(`/report/docx?task=${encodeURIComponent(task)}`, `ghoul-report-${task}.docx`),
+  exportFindingDocx: (id: string) =>
+    downloadFile(`/exploration/findings/${encodeURIComponent(id)}/docx`, `ghoul-finding-${id}.docx`),
   intents: (task?: string) => get<TaskNode[]>(`/exploration/intents${tq(task)}`).then(arr),
   tokenStats: (task?: string) =>
     get<{ workers: TokenUsage[]; sessions: SessionTokenUsage[]; total: TokenTotal }>(
@@ -828,6 +934,18 @@ export const api = {
     brave_search_api_key?: string;
     tavily_search_api_key?: string;
   }) => post<{ ok: boolean; error?: string; count?: number; backend?: string }>(`/settings/web-search/test`, patch),
+  vulnintelStatus: () => get<VulnIntelStatus>("/vulnintel/status"),
+  vulnintelSaveConfig: (payload: VulnIntelConfigPatch) =>
+    patch<{ ok: boolean }>("/vulnintel/config", payload),
+  vulnintelSyncNow: () => post<{ accepted: boolean }>("/vulnintel/sync"),
+  vulnintelSyncCancel: () => post<{ cancelling: boolean }>("/vulnintel/cancel"),
+  vulnintelSearch: (query: { product: string; vendor?: string; version?: string; limit?: number }) => {
+    const params = new URLSearchParams({ product: query.product });
+    if (query.vendor) params.set("vendor", query.vendor);
+    if (query.version) params.set("version", query.version);
+    if (query.limit) params.set("limit", String(query.limit));
+    return get<{ items: VulnIntelHit[]; count: number }>(`/vulnintel/search?${params.toString()}`);
+  },
 
   // ---- 漏洞 IM 推送 ----
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，

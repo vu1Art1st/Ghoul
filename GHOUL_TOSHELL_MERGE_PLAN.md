@@ -213,13 +213,13 @@ flowchart LR
 
 预计：2-3 周。
 
-- [ ] 吸收 Pojun 的 vulnintel、NVD/KEV/GHSA/PoC、nuclei 模板同步。
-- [ ] 吸收 Pojun 的证据硬闸、机械验证凭据、DOCX 报告。
-- [ ] 吸收 ARTEX-main 的 Finding case、完成证据审核。
-- [ ] 吸收 artex-ymh 的 chains verifier、反证清单、pivot hints。
-- [ ] 吸收 artex-ld 的 Finding 显式派发、证据版本。
-- [ ] 吸收 RuoJi6 的 Finding 归并、人工整理。
-- [ ] 统一 Finding/Evidence 主模型，禁止保留三套并行模型。
+- [x] 吸收 Pojun 的 vulnintel、NVD/KEV/GHSA/PoC、nuclei 模板同步。
+- [x] 吸收 Pojun 的证据硬闸、机械验证凭据、DOCX 报告。
+- [x] 吸收 ARTEX-main 的 Finding case、完成证据审核。
+- [x] 吸收 artex-ymh 的 chains verifier、反证清单、pivot hints。
+- [x] 吸收 artex-ld 的 Finding 显式派发、证据版本。
+- [x] 吸收 RuoJi6 的 Finding 归并、人工整理。
+- [x] 统一 Finding/Evidence 主模型，禁止保留三套并行模型。
 
 退出条件：
 
@@ -894,6 +894,7 @@ mcp:
 - [x] Phase 0 契约、配置、sidecar、token 与 UI 边界验收。
 - [ ] Phase 0 退出：清理既有 PostgreSQL 测试环境与 Windows 路径断言后，全仓测试通过。
 - [x] Phase 1 可靠性基础验收。
+- [x] Phase 2 证据与漏洞闭环验收。
 
 ### Phase 0 检查清单
 
@@ -917,13 +918,13 @@ mcp:
 
 ### Phase 2 检查清单
 
-- [ ] Pojun vulnintel。
-- [ ] Pojun 证据硬闸。
-- [ ] Pojun DOCX 报告。
-- [ ] ARTEX-main Finding case。
-- [ ] artex-ymh chains verifier。
-- [ ] artex-ld Finding 派发。
-- [ ] RuoJi Finding 归并。
+- [x] Pojun vulnintel。
+- [x] Pojun 证据硬闸。
+- [x] Pojun DOCX 报告。
+- [x] ARTEX-main Finding case。
+- [x] artex-ymh chains verifier。
+- [x] artex-ld Finding 派发。
+- [x] RuoJi Finding 归并。
 
 ### Phase 3 检查清单
 

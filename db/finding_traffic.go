@@ -328,6 +328,7 @@ func (d *DB) EditFindingTraffic(ctx context.Context, findingID, bindingID, versi
 type RecordFindingInput struct {
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
+	EvidenceGrade                                        string
 	AssetIDs                                             []int64
 }
 
@@ -335,6 +336,9 @@ type RecordedFinding struct {
 	FindingID int64           `json:"finding_id,string"`
 	NodeID    int64           `json:"finding_node_id,string"`
 	Traffic   *FindingTraffic `json:"traffic"`
+	// Duplicate means this report matched an active finding in the same task
+	// and its evidence was merged into that record.
+	Duplicate bool `json:"duplicate,omitempty"`
 }
 
 // ctx 由调用方传入本次事务所用的上下文（而非在内部取 context.Background）：
@@ -361,6 +365,52 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 			return nil, errors.New("intent_id 必须是本任务的意图（关联任务意图只读）")
 		}
 	}
+	in.VulnClass = NormalizeVulnClass(in.VulnClass)
+	if strings.TrimSpace(in.EvidenceGrade) == "" {
+		in.EvidenceGrade = "unverified"
+	}
+	fingerprint := FindingFingerprint(in)
+	if in.TaskID > 0 && len(in.AssetIDs) > 0 {
+		var dupeID, dupeNode int64
+		var dupeSeverity string
+		err := tx.QueryRow(`SELECT id, COALESCE(node_id,0), severity FROM findings
+			WHERE task_id=$1 AND fingerprint=$2
+			  AND status IN ('pending','in_progress','confirmed')
+			ORDER BY id LIMIT 1 FOR UPDATE`, in.TaskID, fingerprint).Scan(&dupeID, &dupeNode, &dupeSeverity)
+		if err == nil {
+			severity := MaxSeverity(dupeSeverity, in.Severity)
+			if _, err := tx.Exec(`UPDATE findings
+				SET evidence=evidence || $2,
+				    severity=$3,
+				    evidence_grade=CASE WHEN evidence_grade='unverified' THEN $4 ELSE evidence_grade END,
+				    evidence_version=evidence_version+1,
+				    evidence_audit=evidence_audit || jsonb_build_array(jsonb_build_object(
+				      'at',now(),'event','duplicate_merge','actor',$5::text,
+				      'intent_id',$6::bigint,'grade',$4::text))
+				WHERE id=$1`,
+				dupeID, "\n\n--- 二次确认 ---\n"+in.Evidence, severity, in.EvidenceGrade, in.Worker, in.IntentID); err != nil {
+				return nil, err
+			}
+			if in.IntentID > 0 && dupeNode > 0 {
+				if _, err := tx.Exec(`INSERT INTO exploration_edges(exploration_id,src_id,rel,dst_id)
+					SELECT $1,$2,$3,$4
+					WHERE NOT EXISTS(SELECT 1 FROM exploration_edges
+						WHERE exploration_id=$1 AND src_id=$2 AND rel=$3 AND dst_id=$4)`,
+					in.ExplorationID, in.IntentID, RelYields, dupeNode); err != nil {
+					return nil, err
+				}
+			}
+			if err := AddFindingTrafficTx(tx, dupeID, prepared); err != nil {
+				return nil, err
+			}
+			out := &RecordedFinding{FindingID: dupeID, NodeID: dupeNode, Duplicate: true}
+			out.Traffic, err = FindingTrafficTx(tx, dupeID)
+			return out, err
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
 	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}})
 	out := &RecordedFinding{}
 	if err := tx.QueryRow(`INSERT INTO exploration_nodes(exploration_id,kind,payload,priority,state,origin)
@@ -382,8 +432,8 @@ VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string
 		assets = []int64{}
 	}
 	raw, _ := json.Marshal(assets)
-	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids)
-VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw)).Scan(&out.FindingID); err != nil {
+	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids,fingerprint,evidence_grade)
+VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw), fingerprint, in.EvidenceGrade).Scan(&out.FindingID); err != nil {
 		return nil, err
 	}
 	// 在**同一事务**里登记一条推送事件：提交即保证「漏洞落库」与「推送任务存在」

@@ -493,6 +493,12 @@ export interface Finding {
   evidence_version?: number;
   report_evidence_version?: number;
   report_stale?: boolean;
+  evidence_grade?: string;
+  fingerprint?: string;
+  evidence_audit?: unknown[];
+  verification?: FindingVerification;
+  counter_evidence?: string[];
+  pivot_hints?: string[];
   id: string;
   finding_id?: string; // 独立 findings 表的行 id,状态更新的句柄(任务内旧节点可能缺失)
   vulnclass: string;
@@ -510,6 +516,76 @@ export interface Finding {
   inherited?: boolean;
   assets?: FindingAsset[];
   ts: string;
+}
+
+export interface FindingVerification {
+  verdict?: "verified" | "false_positive" | "inconclusive";
+  summary?: string;
+  evidence?: string;
+  counter_evidence?: string[];
+  pivot_hints?: string[];
+  actor?: string;
+  verified_at?: string;
+  evidence_version?: number;
+}
+
+export interface FindingEvidence {
+  id: string;
+  finding_id: string;
+  kind: string;
+  title: string;
+  content?: string;
+  storage_ref?: string;
+  sha256?: string;
+  size: number;
+  redacted: boolean;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface FindingEvidenceTimeline {
+  finding_id: string;
+  version: number;
+  report_version: number;
+  generic: FindingEvidence[];
+  traffic?: FindingTraffic;
+  verification?: FindingVerification;
+  counter_evidence?: string[];
+  pivot_hints?: string[];
+}
+
+export interface FindingCase {
+  id: string;
+  task_id?: string;
+  title: string;
+  reason: string;
+  severity: Severity | "";
+  severity_reason: string;
+  report?: string;
+  version: number;
+  report_version: number;
+  active: boolean;
+  count: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  created_at: string;
+}
+
+export interface FindingCaseEvent {
+  id: string;
+  action: string;
+  actor: string;
+  reason: string;
+  finding_ids: number[];
+  created_at: string;
+}
+
+export interface FindingCaseDetail {
+  case: FindingCase;
+  members: Finding[];
+  events: FindingCaseEvent[];
 }
 
 // FindingsPage 是发现列表的服务端分页响应。
@@ -1615,4 +1691,65 @@ export interface InterceptExecution {
   session: string;
   seq: number;
   items: Activity[];
+}
+
+export interface VulnIntelConfig {
+  enabled: boolean;
+  nvd_api_key: string;
+  nvd_key_set: boolean;
+  github_token: string;
+  github_token_set: boolean;
+  proxy: string;
+  poc_enabled: boolean;
+  backfill_days: number;
+  max_runtime_minutes: number;
+}
+
+export interface VulnIntelConfigPatch {
+  enabled?: boolean;
+  nvd_api_key?: string;
+  github_token?: string;
+  proxy?: string;
+  poc_enabled?: boolean;
+  backfill_days?: number;
+  max_runtime_minutes?: number;
+}
+
+export interface VulnIntelSource {
+  source: string;
+  last_sync_at?: string;
+  cursor: string;
+  total_synced: number;
+  last_error: string;
+  enabled: boolean;
+}
+
+export interface VulnIntelHit {
+  cve_id: string;
+  severity: string;
+  cvss_score?: number;
+  kev: boolean;
+  published?: string;
+  title: string;
+  matched?: string[];
+  version_seen_in_criteria?: boolean;
+  version_in_range?: boolean;
+  source?: string;
+  cwes?: string[];
+}
+
+export interface VulnIntelStatus {
+  enabled: boolean;
+  sources: VulnIntelSource[];
+  counts: { cves: number; kev: number; pocs: number; ghsa?: number };
+  config?: VulnIntelConfig;
+  sync_running?: boolean;
+  sync_started_at?: string;
+  sync_phase?: string;
+  nuclei?: {
+    dir: string;
+    exists: boolean;
+    templates: number;
+    hint: string;
+  };
 }

@@ -273,6 +273,21 @@ Phase 1 已合并长任务可靠性、预算、恢复和运维访问控制。所
 
 验证：`go build ./...`、`go vet ./...`、定向可靠性测试和 `pnpm exec tsc --noEmit` 通过。来源包括 ARTEX-main、Pojun、artex-ymh、artex-ld、RuoJi6/ARTEX；本轮新增与修改代码继续按 AGPL-3.0 发布。
 
+### 证据与漏洞闭环（Phase 2）
+
+Phase 2 在现有 `findings` 主表上统一了发现、证据、验证、复测、归并、派发和报告链路，没有引入第二套 Finding 数据模型。
+
+- **漏洞情报库**：支持 NVD、CISA KEV、GHSA、公开 PoC 和 nuclei 模板树同步；提供 `search_vulns`、`get_vuln`、`get_poc` 工具和系统「漏洞情报」页面，支持手动同步、中断、状态水位与组件检索。
+- **证据硬闸**：critical/high 必须有机械可复现证据；纯版本/banner 匹配不能直接判高危；凭据类漏洞必须记录实际登录成功或有效会话。重复上报按任务内指纹合并，并保留二次确认证据。
+- **统一证据时间线**：流量证据继续使用带哈希的快照和版本 CAS；命令输出、文件摘要、截图等通用证据写入 `finding_evidence`，两类证据通过同一 API 汇总展示，变更均递增 Finding 证据版本。
+- **验证与反证**：验证结论保存 `verified / false_positive / inconclusive`，要求至少一条实际反证排查项；按漏洞类别生成反证 checklist，并保存同类场景的转向提示。
+- **Finding 归并**：`finding_cases` 将同一根因的多次观测归并为交付条目，成员仍指向原始 Finding；支持人工归并、移出、统一报告版本和审计事件。
+- **显式派发**：已确认 Finding 可派发回原任务继续验证或利用，派发记录冻结当时的证据版本并写入审计。
+- **DOCX 报告**：任务总报告和单漏洞报告可导出 Word，包含统一报告、证据、流量绑定、复测记录、资产名称和证据截图引用。
+- **工具与 Skill**：新增 `component-vuln-intel` Skill，Planner/Worker/Pentest 默认可见，情报工具按 agent 绑定加载。
+
+验证：`go test ./vulnintel ./report ./findingverify ./agent ./db`、后端编译和 `pnpm exec tsc --noEmit` 通过。来源包括 Pojun、ARTEX-main、artex-ymh、artex-ld、RuoJi6/ARTEX；本轮新增与修改代码继续按 AGPL-3.0 发布，Toshell 仍保持独立 MIT sidecar 边界。
+
 ### 反向代理部署（HTTPS / 只开放 443）
 
 前端和 API/SSE 都由同一个后端端口（默认 `:8787`）提供，实时活动流默认走**同源**地址，因此**无需配置 `NEXT_PUBLIC_SSE_BASE`**，公网只开放 443、把 8787 留在内网即可。

@@ -1102,6 +1102,15 @@ CREATE TABLE IF NOT EXISTS findings (
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS name   TEXT NOT NULL DEFAULT '';
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS report TEXT NOT NULL DEFAULT '';
+-- 上报指纹与机械证据审计：同一任务内同指纹的重复上报合并到原记录，避免
+-- Agent 反复登记同一漏洞；evidence_audit 保存补证/验证历史，不覆盖原始证据。
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS fingerprint TEXT NOT NULL DEFAULT '';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS evidence_audit JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS evidence_grade TEXT NOT NULL DEFAULT 'unverified';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS verification JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS counter_evidence JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS pivot_hints JSONB NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS idx_findings_task_fp ON findings(task_id, fingerprint) WHERE task_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_findings_task ON findings(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_time ON findings(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status, created_at DESC);
@@ -1172,6 +1181,179 @@ CREATE TABLE IF NOT EXISTS finding_traffic_bindings (
 );
 CREATE INDEX IF NOT EXISTS idx_finding_traffic_order ON finding_traffic_bindings(finding_id, position, id);
 CREATE INDEX IF NOT EXISTS idx_finding_traffic_snapshot ON finding_traffic_bindings(snapshot_id);
+
+-- 通用证据档案：命令输出、截图、文件哈希、人工整理材料等非流量证据。
+-- 流量证据仍由 finding_traffic_bindings 管理；两者通过统一 API/DTO 汇总，
+-- 不建立第二套 Finding 主模型。
+CREATE TABLE IF NOT EXISTS finding_evidence (
+    id            BIGSERIAL PRIMARY KEY,
+    finding_id    BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL DEFAULT 'manual',
+    title         TEXT NOT NULL DEFAULT '',
+    content       TEXT NOT NULL DEFAULT '',
+    storage_ref   TEXT NOT NULL DEFAULT '',
+    sha256        TEXT NOT NULL DEFAULT '',
+    size          BIGINT NOT NULL DEFAULT 0,
+    redacted      BOOLEAN NOT NULL DEFAULT false,
+    metadata_json JSONB NOT NULL DEFAULT '{}',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_finding_evidence_finding ON finding_evidence(finding_id, id DESC);
+
+-- 显式派发：把已确认 Finding 交给指定 Agent/任务继续验证或利用，并冻结
+-- 派发时的证据版本，便于后续判断结论是否基于过期证据。
+CREATE TABLE IF NOT EXISTS finding_dispatches (
+    id               BIGSERIAL PRIMARY KEY,
+    finding_id       BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    task_id          BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    agent_key        TEXT NOT NULL DEFAULT 'worker',
+    conversation_id  BIGINT REFERENCES conversations(id) ON DELETE SET NULL,
+    status           TEXT NOT NULL DEFAULT 'pending',
+    evidence_version BIGINT NOT NULL DEFAULT 0,
+    reason           TEXT NOT NULL DEFAULT '',
+    created_by       TEXT NOT NULL DEFAULT 'human',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_finding_dispatches_finding ON finding_dispatches(finding_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_finding_dispatches_task ON finding_dispatches(task_id, id DESC);
+
+-- Finding case：将同一根因/同一缺陷的多次观测归并为一个交付条目。
+-- 成员仍是 findings 行；case 不复制证据正文，只保存统一报告与评级。
+CREATE TABLE IF NOT EXISTS finding_cases (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    origin_task_id BIGINT NOT NULL,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT '',
+    severity_reason TEXT NOT NULL DEFAULT '',
+    report TEXT NOT NULL DEFAULT '',
+    version BIGINT NOT NULL DEFAULT 1,
+    report_version BIGINT NOT NULL DEFAULT 0,
+    active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS finding_case_members (
+    finding_id BIGINT PRIMARY KEY REFERENCES findings(id) ON DELETE CASCADE,
+    case_id BIGINT NOT NULL REFERENCES finding_cases(id),
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_finding_case_members_case ON finding_case_members(case_id);
+CREATE TABLE IF NOT EXISTS finding_case_events (
+    id BIGSERIAL PRIMARY KEY,
+    case_id BIGINT NOT NULL REFERENCES finding_cases(id),
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    finding_ids JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS finding_case_suggestions (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    left_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    right_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(left_id,right_id),
+    CHECK(left_id < right_id)
+);
+CREATE TABLE IF NOT EXISTS finding_case_blocks (
+    left_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    right_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    PRIMARY KEY(left_id,right_id),
+    CHECK(left_id < right_id)
+);
+CREATE OR REPLACE FUNCTION finding_case_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE cid BIGINT; remaining INTEGER;
+BEGIN
+    IF TG_TABLE_NAME = 'findings' THEN
+        IF OLD IS NOT DISTINCT FROM NEW THEN RETURN NEW; END IF;
+        SELECT case_id INTO cid FROM finding_case_members WHERE finding_id=NEW.id;
+    ELSE
+        cid := OLD.case_id;
+    END IF;
+    IF cid IS NOT NULL THEN
+        UPDATE finding_cases SET version=version+1 WHERE id=cid;
+        IF TG_OP='DELETE' THEN
+            SELECT count(*) INTO remaining FROM finding_case_members WHERE case_id=cid;
+            INSERT INTO finding_case_events(case_id,action,actor,reason,finding_ids)
+                VALUES(cid,'member_deleted','system','成员移出或删除',jsonb_build_array(OLD.finding_id));
+            IF remaining < 2 THEN
+                UPDATE finding_cases SET active=false WHERE id=cid;
+                DELETE FROM finding_case_members WHERE case_id=cid;
+            END IF;
+        END IF;
+    END IF;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS finding_case_content_changed ON findings;
+CREATE TRIGGER finding_case_content_changed AFTER UPDATE ON findings
+FOR EACH ROW EXECUTE FUNCTION finding_case_changed();
+DROP TRIGGER IF EXISTS finding_case_member_deleted ON finding_case_members;
+CREATE TRIGGER finding_case_member_deleted AFTER DELETE ON finding_case_members
+FOR EACH ROW EXECUTE FUNCTION finding_case_changed();
+
+-- =====================================================================
+-- M2. 漏洞情报库（NVD / CISA KEV / GHSA / PoC / nuclei）
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS vuln_cves (
+    id             BIGSERIAL PRIMARY KEY,
+    cve_id         TEXT NOT NULL UNIQUE,
+    source         TEXT NOT NULL DEFAULT 'nvd',
+    title          TEXT NOT NULL DEFAULT '',
+    description    TEXT NOT NULL DEFAULT '',
+    severity       TEXT NOT NULL DEFAULT 'UNKNOWN',
+    cvss_score     DOUBLE PRECISION,
+    cvss_vector    TEXT NOT NULL DEFAULT '',
+    published_at   TIMESTAMPTZ,
+    modified_at    TIMESTAMPTZ,
+    cpe_criteria   JSONB,
+    refs           JSONB,
+    cwes           TEXT[] NOT NULL DEFAULT '{}',
+    kev            BOOLEAN NOT NULL DEFAULT false,
+    kev_date_added TIMESTAMPTZ,
+    synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_vuln_cves_severity ON vuln_cves(severity);
+CREATE INDEX IF NOT EXISTS idx_vuln_cves_published ON vuln_cves(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vuln_cves_kev ON vuln_cves(kev, published_at DESC) WHERE kev;
+CREATE TABLE IF NOT EXISTS vuln_cpe_products (
+    cve_id             TEXT NOT NULL,
+    vendor             TEXT NOT NULL DEFAULT '',
+    product            TEXT NOT NULL,
+    version_start_incl TEXT,
+    version_start_excl TEXT,
+    version_end_incl   TEXT,
+    version_end_excl   TEXT,
+    PRIMARY KEY (cve_id, vendor, product)
+);
+CREATE INDEX IF NOT EXISTS idx_vuln_cpe_product ON vuln_cpe_products(product);
+CREATE TABLE IF NOT EXISTS vuln_pocs (
+    id        BIGSERIAL PRIMARY KEY,
+    cve_id    TEXT NOT NULL,
+    source    TEXT NOT NULL,
+    url       TEXT NOT NULL,
+    title     TEXT NOT NULL DEFAULT '',
+    kind      TEXT NOT NULL DEFAULT 'poc',
+    stars     INTEGER NOT NULL DEFAULT 0,
+    synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (source, url)
+);
+CREATE INDEX IF NOT EXISTS idx_vuln_pocs_cve ON vuln_pocs(cve_id);
+CREATE TABLE IF NOT EXISTS vuln_sync_state (
+    source       TEXT PRIMARY KEY,
+    last_sync_at TIMESTAMPTZ,
+    cursor       TEXT NOT NULL DEFAULT '',
+    total_synced BIGINT NOT NULL DEFAULT 0,
+    last_error   TEXT NOT NULL DEFAULT '',
+    enabled      BOOLEAN NOT NULL DEFAULT true,
+    page_cursor  TEXT NOT NULL DEFAULT ''
+);
 
 -- =====================================================================
 -- M. 后端日志持久化
