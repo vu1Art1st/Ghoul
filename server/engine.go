@@ -539,6 +539,12 @@ type steerHooks struct {
 	limit int
 	// label 形如 "worker-1 · #42"，只用于日志。
 	label string
+	// repeats detects the exact same tool call repeated back-to-back. nil keeps
+	// the historical behavior.
+	repeats *repeatTracker
+	// idle stops a work that repeatedly executes tools without writing anything.
+	idle   *idleStopTracker
+	cancel func(error)
 }
 
 // 空转回合(只有思考、既无正文也无工具调用)续跑次数的默认值，与 SDK 空响应重试的
@@ -581,7 +587,26 @@ func (h steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (
 			"\n（这是规划者对本意图的即时指令；本次工具调用未执行，请据此调整下一步。若与你当前打算冲突，以此为准。）", nil
 	}
 	if h.inner != nil {
-		return h.inner.PreToolUse(ctx, name, input)
+		block, msg, updated := h.inner.PreToolUse(ctx, name, input)
+		if block {
+			return block, msg, updated
+		}
+		if updated != nil {
+			input = updated
+		}
+	}
+	if h.repeats != nil {
+		if streak, block := h.repeats.observe(name, input); block {
+			log.Printf("[work %s] 重复调用拦截：%s 连续第 %d 次完全相同入参", h.label, name, streak)
+			return true, repeatBlockText(streak), nil
+		}
+	}
+	if block, msg, cancel := h.idle.beforeTool(name); block {
+		if cancel && h.cancel != nil {
+			h.cancel(agent.AbortIdleStop)
+		}
+		log.Printf("[work %s] 无增量自动收场检查拦截 %s（cancel=%v）", h.label, name, cancel)
+		return true, msg, nil
 	}
 	return false, "", nil
 }
@@ -590,6 +615,7 @@ func (h steerHooks) PostToolUse(ctx context.Context, name string, input, result 
 	if h.inner != nil {
 		h.inner.PostToolUse(ctx, name, input, result, isErr)
 	}
+	h.idle.advance(name)
 }
 
 // Stop 在 guard 原有语义之上补一层「空转回合」续跑:模型只输出了思考、既没给正文
@@ -607,7 +633,19 @@ func (h steerHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []s
 	}
 	// inner 已经决定硬停、或已经要注入自己的续跑消息 → 尊重它，不再叠加。
 	// limit<=0 = 用户把「空响应重试次数」配成了 -1，即显式关掉这层。
-	if prevent || len(blocking) > 0 || h.nudges == nil || h.limit <= 0 || !isThinkingOnlyTurn(messages) {
+	if prevent || len(blocking) > 0 {
+		return prevent, blocking, msg
+	}
+	if idlePrevent, idleBlocking, idleReason, idleCancel := h.idle.checkStop(); idlePrevent || len(idleBlocking) > 0 {
+		if idleCancel && h.cancel != nil {
+			h.cancel(agent.AbortIdleStop)
+		}
+		if idlePrevent {
+			log.Printf("[work %s] 无增量自动收场：%s", h.label, idleReason)
+		}
+		return idlePrevent, idleBlocking, idleReason
+	}
+	if h.nudges == nil || h.limit <= 0 || !isThinkingOnlyTurn(messages) {
 		return prevent, blocking, msg
 	}
 	n := h.nudges.Add(1)
@@ -997,21 +1035,37 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// wrap the guard hooks so steer_work can inject a mid-run course-correction
 	// for THIS intent (drained before the worker's next tool call).
 	iid := intent.ID
+	idle := newIdleStopTracker()
 	taskEmit := func(a db.Activity) {
+		if a.Kind == "tool_result" && !a.IsError && idleStopWriteTools[a.Tool] {
+			idle.noteWrite()
+		}
 		nid := iid
 		a.NodeID, a.Worker = &nid, name
 		emit(a)
 	}
 	label := fmt.Sprintf("%s · #%d", name, iid)
 	workCtx = intercept.WithTaskContext(workCtx, t.ID, label, taskEmit)
+	if budgetWatch := intentBudgetWatcher(intentBudgetFromPG(e.m.pg), func(msg string) error {
+		return e.SteerWork(iid, msg)
+	}, label); budgetWatch != nil {
+		inner := emit
+		emit = func(a db.Activity) {
+			budgetWatch(a)
+			inner(a)
+		}
+	}
 	// nudges 有意建在 model_error 重跑循环之外:空转续跑的上限是「这条意图」的总量，
 	// 重跑一轮不该把额度清零重来。
 	hooks := steerHooks{
-		inner:  t.Guard.Hooks(),
-		drain:  func() (string, bool) { return e.drainSteer(iid) },
-		nudges: &atomic.Int64{},
-		limit:  e.emptyTurnNudgeLimit(),
-		label:  label,
+		inner:   t.Guard.Hooks(),
+		drain:   func() (string, bool) { return e.drainSteer(iid) },
+		nudges:  &atomic.Int64{},
+		limit:   e.emptyTurnNudgeLimit(),
+		label:   label,
+		repeats: newRepeatTracker(),
+		idle:    idle,
+		cancel:  workCancel,
 	}
 	wTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
 	e.BeginLLMCall(t.ID)
@@ -1050,7 +1104,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// unregister would always be true (unregister cancels it) → every completed
 	// work would be wrongly marked stopped.
 	workCause := context.Cause(workCtx)
-	killed := workCtx.Err() != nil && ectx.Err() == nil
+	idleStopped := errors.Is(workCause, agent.AbortIdleStop) || idle.stoppedByIdle()
+	killed := workCtx.Err() != nil && ectx.Err() == nil && !idleStopped
 	action, completeWork := e.detachWork(intent.ID)
 	// A caller may stop waiting and release its in-memory reservation before the
 	// agent honors cancellation. The named context cause remains authoritative and
@@ -1133,7 +1188,12 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// terminal分流：撞步数上限 ≠ 完成。max_turns→exhausted（规划者据此知道这个方向
 	// 试过但没真正做完、需换角度，而非当成已覆盖永久跳过）；出错→blocked；正常→done。
 	state := "done"
+	stopReason := ""
 	switch {
+	case idleStopped:
+		state = "exhausted"
+		stopReason = db.IntentStopIdleStop
+		log.Printf("[worker %s] intent %d 无增量自动收场(exhausted/idle_stop)，本次写回 %s", name, intent.ID, wrote)
 	case err != nil:
 		state = "blocked"
 	case reason == harness.ReasonMaxTurns:
@@ -1148,6 +1208,10 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	} else {
 		if stateErr := transitionIntentState(t.Store, intent.ID, "running", state); stateErr != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败: %v", name, t.ID, intent.ID, state, stateErr)
+		} else if stopReason != "" {
+			if err := t.Store.SetIntentStopReason(intent.ID, stopReason); err != nil {
+				log.Printf("[worker %s] task %s 意图 #%d 停止原因落库失败: %v", name, t.ID, intent.ID, err)
+			}
 		}
 	}
 	log.Printf("[worker %s] task %s 意图 #%d 结束: %s (写回 %s)", name, t.ID, intent.ID, state, wrote)

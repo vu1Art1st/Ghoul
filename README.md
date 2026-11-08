@@ -257,6 +257,22 @@ Ghoul 将 Toshell 作为唯一 C2 后端，但两者保持独立进程和独立�
 
 > Phase 0 测试记录：`go test ./config ./integrations/toshell/...` 通过。全仓基线中，除 `server` 包依赖本机 PostgreSQL 配置以及 4 个既有 Windows 路径分隔符断言外，其余包通过；这些既有环境/平台问题不属于本次 C2 改动。
 
+### 可靠性基础（Phase 1）
+
+Phase 1 已合并长任务可靠性、预算、恢复和运维访问控制。所有能力均保持 Toshell 为唯一 C2 后端，没有引入 Pojun/artex-ymh 的监听器、植入端或隧道实现。
+
+- **Planner handoff**：跨唤醒 todolist 持久化到 PostgreSQL，版本 CAS 防止并发覆盖；恢复失败只降级为内存规划，不影响业务图。
+- **完成审计**：`prove_goal` 拒绝推断事实、空证据和 `partial/blocked` 检查点，避免提前收官。
+- **Worker 预算与空转控制**：意图 token 软预算触发一次写回收尾提醒；相同工具和参数连续调用第 3 次起拦截，最多拦截 2 次；连续无写回触发 `idle_stop`。
+- **Deadline 冻结感知**：VM/宿主机挂起造成超长睡眠时，按超睡时长顺延内存 deadline，避免恢复后误判任务超时。
+- **执行模式**：目标明确要求“仅漏洞验证、不拿权限、不横向”时，Planner 注入最高优先级模式约束。
+- **HTTP Basic Auth**：独立于 Ghoul 登录账号的访问门，支持密码哈希、HMAC 隔离的 HttpOnly Cookie、即时启用/关闭和凭据轮换失效。
+- **Egress Probe 与代理池**：全局代理可测试出口 IP/延迟；关闭流量捕获时可按轮询使用代理池，捕获开启时仍由全局代理作为 MITM 上游。
+- **Repeater**：服务端直连、禁止环境代理/重定向/CONNECT，逐 DNS 地址校验任务范围、拦截规则和元数据地址，并限制请求/响应大小。
+- **日历任务**：复用 Ghoul 现有 trigger scheduler 的持久化触发模型，不额外复制一套重叠调度器。
+
+验证：`go build ./...`、`go vet ./...`、定向可靠性测试和 `pnpm exec tsc --noEmit` 通过。来源包括 ARTEX-main、Pojun、artex-ymh、artex-ld、RuoJi6/ARTEX；本轮新增与修改代码继续按 AGPL-3.0 发布。
+
 ### 反向代理部署（HTTPS / 只开放 443）
 
 前端和 API/SSE 都由同一个后端端口（默认 `:8787`）提供，实时活动流默认走**同源**地址，因此**无需配置 `NEXT_PUBLIC_SSE_BASE`**，公网只开放 443、把 8787 留在内网即可。

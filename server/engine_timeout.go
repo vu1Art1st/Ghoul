@@ -18,9 +18,10 @@ import (
 //   ④ 等在跑 worker drain(受 grace) → ⑤ 终局一轮 planner 判定 → ⑥ 定终态(带守卫)
 
 const (
-	settleDrainGrace     = 90 * time.Second // 等在跑 worker 优雅收尾的上限;超过则硬 cancel
-	deadlinePollInterval = 2 * time.Second  // deadline 未盖章/LLM 未就绪时的轮询间隔
-	deadlineMaxSleep     = 30 * time.Second // 单次最长睡眠(便于周期复查终态)
+	settleDrainGrace      = 90 * time.Second // 等在跑 worker 优雅收尾的上限;超过则硬 cancel
+	deadlinePollInterval  = 2 * time.Second  // deadline 未盖章/LLM 未就绪时的轮询间隔
+	deadlineMaxSleep      = 30 * time.Second // 单次最长睡眠(便于周期复查终态)
+	freezeDetectThreshold = 60 * time.Second // 实际睡眠超过计划睡眠达到该阈值才判定为冻结/挂起
 )
 
 // ---------- settling 状态 ----------
@@ -146,37 +147,74 @@ func (e *Engine) startDeadlineCoordinator(ctx context.Context, t *Task) {
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.deadlineCoordinator(loopCtx, t) })
 }
 
+// detectFreeze compares planned sleep with wall-clock elapsed time. A VM or host
+// suspend can oversleep by minutes/hours; return only that overshoot so the
+// task deadline can be shifted by the exact frozen interval.
+func detectFreeze(planned, actual time.Duration) time.Duration {
+	overshoot := actual - planned
+	if overshoot < freezeDetectThreshold {
+		return 0
+	}
+	return overshoot
+}
+
+// extendDeadline shifts only the in-process deadline. A restart reloads the
+// database value, so freeze protection is intentionally process-scoped.
+func (e *Engine) extendDeadline(taskID string, shift time.Duration) {
+	seconds := int64(shift / time.Second)
+	if seconds <= 0 {
+		return
+	}
+	for {
+		value, ok := e.deadline.Load(taskID)
+		if !ok {
+			return
+		}
+		old := value.(int64)
+		if e.deadline.CompareAndSwap(taskID, old, old+seconds) {
+			log.Printf("[deadline] WARN task %s 检测到冻结 %s，deadline 顺延至 %s",
+				taskID, (time.Duration(seconds) * time.Second).String(),
+				time.Unix(old+seconds, 0).Format("2006-01-02 15:04:05"))
+			return
+		}
+	}
+}
+
 // deadlineCoordinator waits until the task's absolute deadline, then runs the settle
 // sequence. Absolute wall-clock: it keeps counting through pauses.
 func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
+	planned := time.Duration(0)
+	lastWake := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
+		if shift := detectFreeze(planned, time.Since(lastWake)); shift > 0 {
+			e.extendDeadline(t.ID, shift)
+		}
 		if isTerminalStatus(e.m.TaskStatus(t.ID)) {
 			return // already finished (goals met / failed) — nothing to time out
 		}
 		dl := e.taskDeadline(t)
+		nap := deadlinePollInterval
 		if dl <= 0 {
-			if sleepCtx(ctx, deadlinePollInterval) { // not yet stamped (task hasn't really run)
-				return
-			}
-			continue
-		}
-		if remaining := time.Until(time.Unix(dl, 0)); remaining > 0 {
-			nap := remaining
+			// not yet stamped (task hasn't really run)
+		} else if remaining := time.Until(time.Unix(dl, 0)); remaining > 0 {
+			nap = remaining
 			if nap > deadlineMaxSleep {
 				nap = deadlineMaxSleep
 			}
-			if sleepCtx(ctx, nap) {
-				return
-			}
-			continue
+		} else {
+			e.settleTask(ctx, t)
+			return
 		}
-		e.settleTask(ctx, t)
-		return
+		planned = nap
+		lastWake = time.Now()
+		if sleepCtx(ctx, nap) {
+			return
+		}
 	}
 }
 

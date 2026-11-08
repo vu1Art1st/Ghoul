@@ -16,6 +16,7 @@ import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSend
 import type { Settings } from "@/lib/types";
 
 import { UpdateCard } from "./_components/update-card";
+import { BasicAuthCard } from "./_components/basic-auth-card";
 
 export default function SystemSettingsPage() {
   const [trafficCapture, setTrafficCapture] = React.useState(false);
@@ -30,7 +31,9 @@ export default function SystemSettingsPage() {
   const [proxyInput, setProxyInput] = React.useState("");
   const [savingProxy, setSavingProxy] = React.useState(false);
   const [globalProxyInput, setGlobalProxyInput] = React.useState("");
+  const [proxyPoolInput, setProxyPoolInput] = React.useState("");
   const [savingGlobalProxy, setSavingGlobalProxy] = React.useState(false);
+  const [testingGlobalProxy, setTestingGlobalProxy] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -43,6 +46,12 @@ export default function SystemSettingsPage() {
   const [injectWorker, setInjectWorker] = React.useState(true);
   // 实验功能:noa 上下文压缩(默认关)。
   const [noaCompaction, setNoaCompaction] = React.useState(false);
+  // 意图级软预算与重复调用拦截。
+  const [intentBudgetEnabled, setIntentBudgetEnabled] = React.useState(true);
+  const [intentBudgetTokens, setIntentBudgetTokens] = React.useState("3000000");
+  const [savingIntentBudget, setSavingIntentBudget] = React.useState(false);
+  const [plannerHandoffSave, setPlannerHandoffSave] = React.useState(true);
+  const [plannerHandoffRestore, setPlannerHandoffRestore] = React.useState(true);
   // 纯前端偏好：不走 /api/settings，直接读写 localStorage。
   const sendMode = useChatSendMode();
 
@@ -55,11 +64,16 @@ export default function SystemSettingsPage() {
     setTavilyKeySet(!!s.tavily_key_set);
     setProxyInput(s.web_search_proxy ?? "");
     setGlobalProxyInput(s.global_proxy ?? "");
+    setProxyPoolInput((s.egress_proxy_pool ?? []).join("\n"));
     setPyInterp(s.python_interpreter ?? "");
     setWorkers(String(s.workers ?? 3));
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
+    setIntentBudgetEnabled(s.intent_budget_enabled !== false);
+    setIntentBudgetTokens(String(s.intent_budget_tokens ?? 3000000));
+    setPlannerHandoffSave(s.planner_handoff_save !== false);
+    setPlannerHandoffRestore(s.planner_handoff_restore !== false);
   }, []);
 
   const saveWorkers = () => {
@@ -77,6 +91,28 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => toast.error("保存失败：" + (e as Error).message))
       .finally(() => setSavingWorkers(false));
+  };
+
+  const saveIntentBudget = () => {
+    const tokens = Number(intentBudgetTokens);
+    if (!Number.isInteger(tokens) || tokens < 500000 || tokens > 20000000) {
+      toast.error("意图 token 预算必须在 500000–20000000 之间");
+      return;
+    }
+    setSavingIntentBudget(true);
+    api
+      .setSettings({
+        intent_budget_enabled: intentBudgetEnabled,
+        intent_budget_tokens: tokens,
+        planner_handoff_save: plannerHandoffSave,
+        planner_handoff_restore: plannerHandoffRestore,
+      })
+      .then((s) => {
+        apply(s);
+        toast.success("已保存意图预算（对之后启动的意图生效）");
+      })
+      .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
+      .finally(() => setSavingIntentBudget(false));
   };
 
   const savePython = () => {
@@ -223,13 +259,34 @@ export default function SystemSettingsPage() {
   const saveGlobalProxy = () => {
     setSavingGlobalProxy(true);
     api
-      .setSettings({ global_proxy: globalProxyInput.trim() })
+      .setSettings({
+        global_proxy: globalProxyInput.trim(),
+        egress_proxy_pool: proxyPoolInput
+          .split(/\r?\n/)
+          .map((v) => v.trim())
+          .filter(Boolean),
+      })
       .then((s) => {
         apply(s);
         toast.success(globalProxyInput.trim() ? "已保存全局代理" : "已清除全局代理（改为直连）");
       })
       .catch((e) => toast.error("保存失败：" + (e as Error).message))
       .finally(() => setSavingGlobalProxy(false));
+  };
+
+  const testGlobalProxy = () => {
+    setTestingGlobalProxy(true);
+    api
+      .testProxy({ proxy: globalProxyInput.trim() })
+      .then((r) => {
+        if (r.ok) {
+          toast.success(`代理可用 · 出口 IP ${r.exit_ip || "未知"} · ${r.latency_ms} ms`);
+        } else {
+          toast.error(`代理测试失败：${r.error || "未知错误"}`);
+        }
+      })
+      .catch((e) => toast.error(`代理测试失败：${(e as Error).message}`))
+      .finally(() => setTestingGlobalProxy(false));
   };
 
   // Run a real "test" search ("test") against the CURRENT form values (backend +
@@ -267,6 +324,7 @@ export default function SystemSettingsPage() {
           column-gap 只管列间距，行间距要由子元素自己给。 */}
       <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
         <UpdateCard />
+        <BasicAuthCard />
 
         <Card className="mb-4 break-inside-avoid md:mb-6">
           <CardHeader>
@@ -292,6 +350,70 @@ export default function SystemSettingsPage() {
               disabled={!loaded || saving}
               onCheckedChange={toggleTraffic}
             />
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldAlertIcon className="size-4" />
+              意图预算与重复调用拦截
+            </CardTitle>
+            <CardDescription>
+              单条 Worker 意图累计消耗达到预算后，只注入一次收尾提醒，要求先写回已确认结果，不直接终止运行。
+              同一工具使用完全相同的参数连续调用第 3 次起会被拦截，最多拦截 2 次后放行，避免活锁。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="intent-budget-enabled" className="text-sm font-normal text-muted-foreground">
+                意图级软预算{intentBudgetEnabled ? " · 已开启" : " · 已关闭"}
+              </Label>
+              <Switch
+                id="intent-budget-enabled"
+                checked={intentBudgetEnabled}
+                disabled={!loaded || savingIntentBudget}
+                onCheckedChange={setIntentBudgetEnabled}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="planner-handoff-save" className="text-sm font-normal text-muted-foreground">
+                Planner 跨唤醒待办保存{plannerHandoffSave ? " · 已开启" : " · 已关闭"}
+              </Label>
+              <Switch
+                id="planner-handoff-save"
+                checked={plannerHandoffSave}
+                disabled={!loaded || savingIntentBudget}
+                onCheckedChange={setPlannerHandoffSave}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="planner-handoff-restore" className="text-sm font-normal text-muted-foreground">
+                Planner 跨唤醒待办恢复{plannerHandoffRestore ? " · 已开启" : " · 已关闭"}
+              </Label>
+              <Switch
+                id="planner-handoff-restore"
+                checked={plannerHandoffRestore}
+                disabled={!loaded || savingIntentBudget}
+                onCheckedChange={setPlannerHandoffRestore}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min={500000}
+                max={20000000}
+                step={100000}
+                className="w-48 font-mono text-sm"
+                value={intentBudgetTokens}
+                disabled={!loaded || savingIntentBudget}
+                onChange={(e) => setIntentBudgetTokens(e.target.value)}
+              />
+              <Button onClick={saveIntentBudget} disabled={!loaded || savingIntentBudget}>
+                保存
+              </Button>
+              <span className="text-muted-foreground text-xs">tokens / 意图</span>
+            </div>
           </CardContent>
         </Card>
 
@@ -357,9 +479,31 @@ export default function SystemSettingsPage() {
               <Button type="button" onClick={saveGlobalProxy} disabled={!loaded || savingGlobalProxy}>
                 保存
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={testGlobalProxy}
+                disabled={!loaded || testingGlobalProxy}
+              >
+                {testingGlobalProxy ? "测试中…" : "测试代理"}
+              </Button>
             </div>
             <p className="text-muted-foreground text-xs">
               {globalProxyInput.trim() ? "已配置 · 所有目标流量经此代理出网" : "未配置 · 目标流量直连出网"}
+            </p>
+            <Label htmlFor="egress-proxy-pool" className="mt-2 text-sm font-normal text-muted-foreground">
+              出口代理池（可选，每行一个）
+            </Label>
+            <textarea
+              id="egress-proxy-pool"
+              className="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring min-h-24 w-full rounded-md border px-3 py-2 font-mono text-sm focus-visible:ring-2 focus-visible:outline-none"
+              placeholder={"http://user:pass@host:8080\nsocks5://host:1080"}
+              value={proxyPoolInput}
+              disabled={!loaded || savingGlobalProxy}
+              onChange={(e) => setProxyPoolInput(e.target.value)}
+            />
+            <p className="text-muted-foreground text-xs">
+              流量捕获关闭时按轮询选择；开启捕获时仍使用上方全局代理作为记录代理上游。
             </p>
           </CardContent>
         </Card>

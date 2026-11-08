@@ -812,7 +812,15 @@ export const api = {
 
   // ---- app settings (runtime toggles) ----
   settings: () => get<Settings>(`/settings`),
+  basicAuthSettings: () => get<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth"),
+  setBasicAuthSettings: (settings: { enabled: boolean; username: string; password: string }) =>
+    put<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth", settings),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
+  testProxy: (patch: { proxy?: string; probe_url?: string }) =>
+    post<{ ok: boolean; exit_ip?: string; latency_ms: number; error?: string; via_proxy: boolean }>(
+      "/settings/proxy/test",
+      patch,
+    ),
   // Run a real "test" search with the given (or saved) config to verify it works.
   testWebSearch: (patch: {
     web_search_backend?: string;

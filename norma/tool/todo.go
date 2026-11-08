@@ -42,6 +42,11 @@ func (s *TodoStore) List() []Todo {
 	return append([]Todo(nil), s.items...)
 }
 
+// Restore replaces the in-memory list with a host-persisted projection.
+func (s *TodoStore) Restore(items []Todo) {
+	s.set(append([]Todo(nil), items...))
+}
+
 func (s *TodoStore) set(items []Todo) {
 	s.mu.Lock()
 	s.items = items

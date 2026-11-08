@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
@@ -245,6 +246,8 @@ type Manager struct {
 	// capture is on it becomes the MITM's upstream; when capture is off it is
 	// injected into agent bash env / WebFetch directly. See ProxyAddr.
 	globalProxy string
+	proxyPool   []string
+	proxySeq    atomic.Uint64
 }
 
 // Settings keys the UI toggles at runtime.
@@ -259,9 +262,10 @@ const (
 	// settingGlobalProxy is the global egress proxy for all target traffic
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.
-	settingGlobalProxy = "global_proxy"
-	settingWorkers     = "workers"
-	settingLLMRecord   = "llm_record"
+	settingGlobalProxy     = "global_proxy"
+	settingEgressProxyPool = "egress_proxy_pool"
+	settingWorkers         = "workers"
+	settingLLMRecord       = "llm_record"
 	// LLM 轮询(故障转移)。默认关闭——开启后走「全局激活配置」的 agent 在当前配置
 	// 不可用(余额不足/key 失效/限流/服务异常)时自动切到下一个配置。
 	// settingLLMPoolBindFallback 仅在轮询开启时有意义:默认关闭,即 agent/任务显式
@@ -433,6 +437,12 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	// off, ProxyAddr hands it to agents directly (bash env / WebFetch).
 	if v, ok, _ := pg.GetSetting(settingGlobalProxy); ok {
 		m.globalProxy = strings.TrimSpace(v)
+	}
+	if v, ok, _ := pg.GetSetting(settingEgressProxyPool); ok && strings.TrimSpace(v) != "" {
+		if err := json.Unmarshal([]byte(v), &m.proxyPool); err != nil {
+			log.Printf("[proxy] 代理池配置无效，已忽略: %v", err)
+			m.proxyPool = nil
+		}
 	}
 	if m.traffic != nil {
 		if err := m.traffic.SetUpstreamProxy(m.globalProxy); err != nil {
@@ -751,6 +761,10 @@ func (m *Manager) ProxyAddr() string {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if len(m.proxyPool) > 0 {
+		idx := m.proxySeq.Add(1) - 1
+		return m.proxyPool[idx%uint64(len(m.proxyPool))]
+	}
 	return m.globalProxy
 }
 
@@ -797,6 +811,43 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 	}
 	// Keep the browser MCP's egress in sync with the new global proxy too.
 	m.syncBrowserMCPProxy()
+	return nil
+}
+
+func (m *Manager) ProxyPool() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.proxyPool...)
+}
+
+func (m *Manager) SetProxyPool(pool []string) error {
+	clean := make([]string, 0, len(pool))
+	seen := map[string]bool{}
+	for _, raw := range pool {
+		raw = strings.TrimSpace(raw)
+		if raw == "" || seen[raw] {
+			continue
+		}
+		if _, err := traffic.ValidateProxyURL(raw); err != nil {
+			return err
+		}
+		seen[raw] = true
+		clean = append(clean, raw)
+		if len(clean) > 32 {
+			return fmt.Errorf("egress proxy pool supports at most 32 entries")
+		}
+	}
+	raw, err := json.Marshal(clean)
+	if err != nil {
+		return err
+	}
+	if err := m.pg.SetSetting(settingEgressProxyPool, string(raw)); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.proxyPool = clean
+	m.proxySeq.Store(0)
+	m.mu.Unlock()
 	return nil
 }
 

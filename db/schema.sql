@@ -1384,3 +1384,12 @@ CREATE INDEX IF NOT EXISTS idx_notification_deliveries_batch
     ON notification_deliveries(batch_id) WHERE batch_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_notification_deliveries_channel
     ON notification_deliveries(channel_id, id DESC);
+
+-- Planner handoff: one versioned projection of the planner's cross-wakeup
+-- todo list. This is a planning aid, never completion or authorization truth.
+CREATE TABLE IF NOT EXISTS planner_handoffs (
+    task_id     BIGINT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    version     BIGINT NOT NULL DEFAULT 1,
+    todos       JSONB NOT NULL DEFAULT '[]',
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

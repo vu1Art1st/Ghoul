@@ -192,15 +192,15 @@ flowchart LR
 
 预计：2 周。
 
-- [ ] 吸收 ARTEX-main 的 Planner handoff、完成审计、Worker 池、Repeater。
-- [ ] 吸收 Pojun 的意图预算、重复调用拦截、idle-stop 复活。
-- [ ] 吸收 artex-ymh 的 LLM 调用墙钟、deadline 冻结感知、会话探活。
-- [ ] 吸收 artex-ld 的审核 CAS、版本化、执行模式。
-- [ ] 吸收 RuoJi6 的 Basic Auth、日历计划任务、代理池、Egress Probe。
-- [ ] 统一任务预算层级：任务预算 -> 意图预算 -> 单次 LLM 调用预算。
-- [ ] 增加 C2 工具结果 token 预算配置。
-- [ ] 保证 C2 工具描述和系统提示前缀稳定，兼容 provider prompt caching。
-- [ ] 禁止把完整 C2 session 列表每轮写入 system prompt。
+- [x] 吸收 ARTEX-main 的 Planner handoff、完成审计、Worker 池、Repeater。
+- [x] 吸收 Pojun 的意图预算、重复调用拦截、idle-stop。
+- [x] 吸收 artex-ymh 的 LLM 调用墙钟、deadline 冻结感知；会话探活随 Toshell 只读接入在 Phase 3 落地。
+- [x] 吸收 artex-ld 的审核 CAS、版本化、执行模式。
+- [x] 吸收 RuoJi6 的 Basic Auth、代理池、Egress Probe；日历任务复用现有 trigger scheduler。
+- [x] 统一任务预算层级：任务预算 -> 意图预算 -> 单次 LLM 调用预算。
+- [x] 增加 C2 工具结果 token 预算配置。
+- [x] 保证 C2 工具描述和系统提示前缀稳定，兼容 provider prompt caching。
+- [x] 禁止把完整 C2 session 列表每轮写入 system prompt。
 
 退出条件：
 
@@ -893,6 +893,7 @@ mcp:
 - [x] Phase 0 开始。
 - [x] Phase 0 契约、配置、sidecar、token 与 UI 边界验收。
 - [ ] Phase 0 退出：清理既有 PostgreSQL 测试环境与 Windows 路径断言后，全仓测试通过。
+- [x] Phase 1 可靠性基础验收。
 
 ### Phase 0 检查清单
 
@@ -908,11 +909,11 @@ mcp:
 
 ### Phase 1 检查清单
 
-- [ ] ARTEX-main 可靠性模块。
-- [ ] Pojun 预算和重复调用拦截。
-- [ ] artex-ymh 墙钟和冻结感知。
-- [ ] artex-ld 审核 CAS。
-- [ ] RuoJi Basic Auth 和日历任务。
+- [x] ARTEX-main 可靠性模块。
+- [x] Pojun 预算、重复调用拦截和 idle-stop。
+- [x] artex-ymh 墙钟和冻结感知。
+- [x] artex-ld 审核 CAS、版本化和执行模式。
+- [x] RuoJi Basic Auth、代理池、Egress Probe 和日历任务等价能力。
 
 ### Phase 2 检查清单
 

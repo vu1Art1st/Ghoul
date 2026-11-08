@@ -39,6 +39,8 @@ var (
 		"规划者判定任务目标已达成并将任务置为 done，随后取消仍在运行的 Worker；这些意图会标记为 stopped，而不是失败")
 	AbortSettleDrainTimeout = cause("settle_drain_timeout", "任务超时收尾的等待时间已用尽",
 		"任务到达 timeout 后等待正在运行的 Worker 优雅收尾，但 90 秒 drain 宽限仍不足，因此执行硬取消；意图会标记为 exhausted，收尾阶段已经写入的事实和资产会保留")
+	AbortIdleStop = cause("idle_stop", "无增量自动收场",
+		"Worker 连续多轮没有写回任何事实、资产、漏洞或证据，系统先提示写回收手，提示后仍无写回，因此结束本轮；意图标记为 exhausted，已写回内容全部保留")
 
 	// Per-work context.
 	AbortKilledByPlanner = cause("killed_by_planner", "规划者终止了这条意图",
