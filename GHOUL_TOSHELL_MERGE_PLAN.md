@@ -940,8 +940,8 @@ mcp:
 
 ### Phase 4 检查清单
 
-- [ ] policy engine。
-- [ ] approval token。
+- [x] policy engine。
+- [x] approval token。
 - [ ] operation 表。
 - [ ] evidence 表。
 - [ ] Confirm 工具。

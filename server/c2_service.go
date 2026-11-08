@@ -11,6 +11,7 @@ import (
 	"github.com/Autumn-27/artex/config"
 	"github.com/Autumn-27/artex/db"
 	toshellclient "github.com/Autumn-27/artex/integrations/toshell/client"
+	"github.com/Autumn-27/artex/integrations/toshell/sanitize"
 	"github.com/gorilla/websocket"
 )
 
@@ -20,17 +21,20 @@ type c2Service struct {
 	client *toshellclient.Client
 
 	instanceID int64
+	secret     []byte
 	mu         sync.Mutex
 	lastError  string
 	lastSync   time.Time
+	rateMu     sync.Mutex
+	rate       map[int64][]time.Time
 }
 
-func newC2Service(pg *db.DB) *c2Service {
+func newC2Service(pg *db.DB, secret []byte) *c2Service {
 	cfg := config.Load().EffectiveC2()
 	if !cfg.Enabled {
 		return nil
 	}
-	return &c2Service{pg: pg, cfg: cfg}
+	return &c2Service{pg: pg, cfg: cfg, secret: append([]byte(nil), secret...), rate: map[int64][]time.Time{}}
 }
 
 func (s *c2Service) start(ctx context.Context) {
@@ -50,6 +54,8 @@ func (s *c2Service) start(ctx context.Context) {
 	s.instanceID = instanceID
 	client, err := toshellclient.New(toshellclient.Config{
 		BaseURL: s.cfg.BaseURL, APIKeyRef: s.cfg.APIKeyRef,
+		AllowedHosts: s.cfg.AllowedHosts, AllowInsecureHTTP: s.cfg.AllowInsecureHTTP,
+		TLSCAFile: s.cfg.TLSCAFile,
 	})
 	if err != nil {
 		s.setError(err)
@@ -133,7 +139,7 @@ func (s *c2Service) syncOnce(ctx context.Context) error {
 		raw, _ := json.Marshal(task)
 		if err := s.pg.UpsertC2Task(qctx, s.instanceID, db.C2TaskInput{
 			ExternalTaskID: task.ID, ExternalSessionID: task.SessionID, TaskType: task.TaskType,
-			Command: task.Command, Status: task.Status, ExitCode: task.ExitCode, Output: task.Output,
+			Command: task.Command, Status: task.Status, ExitCode: task.ExitCode, Output: sanitize.Summary(task.Output, 2000),
 			CreatedAt: task.CreatedAt, CompletedAt: task.CompletedAt, Raw: raw,
 		}); err != nil {
 			return err
@@ -247,7 +253,7 @@ func (s *c2Service) applyEvent(ctx context.Context, event toshellclient.Event) {
 			_ = s.pg.UpsertC2Task(ctx, s.instanceID, db.C2TaskInput{
 				ExternalTaskID: payload.TaskID, ExternalSessionID: payload.SessionID,
 				TaskType: payload.TaskType, Status: status, ExitCode: payload.ExitCode,
-				Output: firstNonEmpty(payload.Output, payload.Error), CreatedAt: time.Now().UTC(),
+				Output: sanitize.Summary(firstNonEmpty(payload.Output, payload.Error), 2000), CreatedAt: time.Now().UTC(),
 				Raw: event.Payload,
 			})
 		}

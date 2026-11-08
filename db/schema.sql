@@ -1470,6 +1470,95 @@ CREATE TABLE IF NOT EXISTS c2_event_cursor (
     status         TEXT NOT NULL DEFAULT 'disconnected'
 );
 
+-- C2 approval ledger. Toshell remains the execution source of truth; this table
+-- records every Ghoul-originated request, its policy decision, and the upstream
+-- task id needed to reconcile results after the sidecar restarts.
+CREATE TABLE IF NOT EXISTS c2_operations (
+    id                 BIGSERIAL PRIMARY KEY,
+    instance_id        BIGINT NOT NULL REFERENCES c2_instances(id) ON DELETE CASCADE,
+    task_id            BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    c2_session_id      BIGINT NOT NULL REFERENCES c2_sessions(id) ON DELETE RESTRICT,
+    binding_id         BIGINT REFERENCES c2_session_bindings(id) ON DELETE SET NULL,
+    tool               TEXT NOT NULL,
+    action             TEXT NOT NULL DEFAULT '',
+    level              TEXT NOT NULL CHECK (level IN ('read','confirm','danger')),
+    actor              TEXT NOT NULL DEFAULT 'agent',
+    source             TEXT NOT NULL DEFAULT 'agent',
+    params_json        JSONB NOT NULL DEFAULT '{}',
+    params_hash        TEXT NOT NULL,
+    idempotency_key    TEXT NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'pending_approval'
+                       CHECK (status IN ('pending_approval','approved','dispatching',
+                                         'dispatched','running','completed','failed',
+                                         'denied','expired','cancelled')),
+    approval_required  BOOLEAN NOT NULL DEFAULT true,
+    approval_stages    INTEGER NOT NULL DEFAULT 1 CHECK (approval_stages BETWEEN 1 AND 2),
+    scope_snapshot     JSONB NOT NULL DEFAULT '[]',
+    external_task_id   BIGINT NOT NULL DEFAULT 0,
+    output_summary     TEXT NOT NULL DEFAULT '',
+    output_sha256      TEXT NOT NULL DEFAULT '',
+    error              TEXT NOT NULL DEFAULT '',
+    requested_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    approved_at        TIMESTAMPTZ,
+    dispatched_at      TIMESTAMPTZ,
+    completed_at       TIMESTAMPTZ,
+    expires_at         TIMESTAMPTZ,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (instance_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_c2_operations_task
+    ON c2_operations(task_id, requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_c2_operations_status
+    ON c2_operations(status, requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_c2_operations_session
+    ON c2_operations(c2_session_id, requested_at DESC);
+DROP TRIGGER IF EXISTS trg_c2_operations_upd ON c2_operations;
+CREATE TRIGGER trg_c2_operations_upd BEFORE UPDATE ON c2_operations
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS c2_operation_approvals (
+    id               BIGSERIAL PRIMARY KEY,
+    operation_id     BIGINT NOT NULL REFERENCES c2_operations(id) ON DELETE CASCADE,
+    stage            INTEGER NOT NULL CHECK (stage BETWEEN 1 AND 2),
+    token_hash       TEXT NOT NULL UNIQUE,
+    params_hash      TEXT NOT NULL,
+    task_snapshot    JSONB NOT NULL DEFAULT '{}',
+    session_snapshot JSONB NOT NULL DEFAULT '{}',
+    status           TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending','approved','rejected','consumed','expired')),
+    approved_by      TEXT NOT NULL DEFAULT '',
+    approved_at      TIMESTAMPTZ,
+    consumed_at      TIMESTAMPTZ,
+    reason           TEXT NOT NULL DEFAULT '',
+    expires_at       TIMESTAMPTZ NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (operation_id, stage)
+);
+CREATE INDEX IF NOT EXISTS idx_c2_approvals_pending
+    ON c2_operation_approvals(status, expires_at);
+
+-- Evidence is materialized into Ghoul immediately after a Toshell task reaches
+-- a terminal state so the sidecar's retention TTL cannot erase the proof.
+CREATE TABLE IF NOT EXISTS c2_evidence (
+    id             BIGSERIAL PRIMARY KEY,
+    operation_id   BIGINT NOT NULL REFERENCES c2_operations(id) ON DELETE CASCADE,
+    task_id        BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    c2_session_id  BIGINT NOT NULL REFERENCES c2_sessions(id) ON DELETE RESTRICT,
+    finding_id     BIGINT REFERENCES findings(id) ON DELETE SET NULL,
+    kind           TEXT NOT NULL DEFAULT 'output',
+    title          TEXT NOT NULL DEFAULT '',
+    mime           TEXT NOT NULL DEFAULT 'text/plain',
+    content        TEXT NOT NULL DEFAULT '',
+    storage_ref    TEXT NOT NULL DEFAULT '',
+    sha256         TEXT NOT NULL DEFAULT '',
+    size           BIGINT NOT NULL DEFAULT 0,
+    redacted       BOOLEAN NOT NULL DEFAULT false,
+    metadata_json  JSONB NOT NULL DEFAULT '{}',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_c2_evidence_operation ON c2_evidence(operation_id, id);
+CREATE INDEX IF NOT EXISTS idx_c2_evidence_finding ON c2_evidence(finding_id, id DESC);
+
 -- =====================================================================
 -- M. 后端日志持久化
 -- =====================================================================

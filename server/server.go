@@ -162,7 +162,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		s.vulnIntel = newVulnIntelService(m.pg, dataDir)
 		s.vulnIntel.wireAgentTools()
 		go s.vulnIntel.Run(ctx)
-		if c2 := newC2Service(m.pg); c2 != nil {
+		if c2 := newC2Service(m.pg, key); c2 != nil {
 			s.c2 = c2
 			c2.start(ctx)
 		}
@@ -861,6 +861,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/c2/listeners", s.c2Listeners)
 	mux.HandleFunc("GET /api/c2/tasks", s.c2Tasks)
 	mux.HandleFunc("GET /api/c2/events", s.c2Events)
+	mux.HandleFunc("GET /api/c2/security", s.c2Security)
+	mux.HandleFunc("GET /api/c2/operations", s.c2Operations)
+	mux.HandleFunc("POST /api/c2/operations", s.c2CreateOperation)
+	mux.HandleFunc("GET /api/c2/operations/{id}", s.c2OperationDetail)
+	mux.HandleFunc("POST /api/c2/operations/{id}/challenge", s.c2ChallengeOperation)
+	mux.HandleFunc("POST /api/c2/operations/{id}/approve", s.c2ApproveOperation)
+	mux.HandleFunc("POST /api/c2/operations/{id}/reject", s.c2RejectOperation)
+	mux.HandleFunc("POST /api/c2/operations/{id}/execute", s.c2ExecuteOperation)
+	mux.HandleFunc("POST /api/c2/evidence/{id}/bind-finding", s.c2BindEvidenceFinding)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("POST /api/chat/upload", s.chatUpload) // 方式1 文件上传:落到会话/任务工作目录 uploads/

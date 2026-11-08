@@ -58,6 +58,20 @@ func TestC2DefaultsFailClosed(t *testing.T) {
 	}
 }
 
+func TestC2HardeningDefaults(t *testing.T) {
+	cfg := Config{C2: C2Config{Enabled: true, Provider: DefaultC2Provider, AllowConfirm: true, AllowDanger: true}}
+	got := cfg.EffectiveC2()
+	if got.ApprovalTTLSeconds != 300 || got.MaxOperationsPerMinute != 30 || got.OutputMaxBytes != 256<<10 {
+		t.Fatalf("unsafe defaults: %+v", got)
+	}
+	if got.DangerApprovals != 2 {
+		t.Fatalf("danger approvals = %d, want 2", got.DangerApprovals)
+	}
+	if !got.AllowDanger {
+		t.Fatalf("explicit danger should remain enabled: %+v", got)
+	}
+}
+
 func TestC2UnknownProviderDisablesWriteTiers(t *testing.T) {
 	cfg := Config{C2: C2Config{
 		Enabled:      true,

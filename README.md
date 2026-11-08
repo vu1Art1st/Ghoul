@@ -598,3 +598,15 @@ flowchart TB
 ### AGPL 来源与修改说明
 
 Ghoul 的修改、分发和网络部署继续适用 AGPL-3.0。Toshell 通过独立 sidecar 和 REST 集成，本轮没有复制、修改或静态链接 Toshell 源码；契约快照仅记录公开 API 响应。若后续复制或修改 Toshell 代码，必须保留其 MIT notice，并在本文件、发布说明和对应源文件中记录变更与日期。
+## C2 审批式操作（Phase 4）
+
+Phase 4 已把 Toshell Confirm/Danger 操作纳入 Ghoul 的策略、审批和证据链：
+
+- `c2_operations`、`c2_operation_approvals`、`c2_evidence` 记录任务/会话绑定、参数哈希、幂等键、审批快照、Toshell task id、物化证据和 Finding 关联。
+- 策略层校验任务范围、RoE、session binding、工具等级和滑动窗口限流；Confirm/Danger 默认 fail-closed，Danger 需要两阶段审批。
+- 审批令牌使用服务端 HMAC、短 TTL、参数哈希、任务/会话快照绑定；数据库只保存令牌哈希，令牌由已认证审批中心签发并一次性消费。
+- `c2_file_list`、`c2_process_list`、`c2_screenshot`、`c2_tunnel` 为 Confirm 工具；`c2_exec` 为 Danger 工具；读取型 `c2_recon` 可执行但只返回摘要并把输出物化。
+- 输出经过 ANSI/控制字符清理、凭据脱敏、注入边界包装和大小限制；人工操作统一写入 `actor=user`、`source=manual`。
+- `/system/c2/approvals` 提供审批中心，`/function/c2/operations/[id]` 提供操作详情；Toshell 管理台仅通过新窗口链接打开，不使用 iframe。
+
+验证：`go test ./integrations/toshell/approval ./integrations/toshell/policy ./integrations/toshell/sanitize ./integrations/toshell/client ./config`、后端编译和 `pnpm exec tsc --noEmit` 通过。参考项目与 AGPL 来源说明见本文件末尾“参考项目与源码引用”一节。

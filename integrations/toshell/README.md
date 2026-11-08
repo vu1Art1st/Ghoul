@@ -150,3 +150,15 @@ Phase 3 已接入服务端 REST/WS 客户端和 Ghoul 原生只读页面：
 ## AGPL 与来源
 
 Ghoul 采用 AGPL-3.0。本集成通过网络调用独立 Toshell 进程，不把 Toshell 源码纳入 Ghoul 二进制。若后续复制或修改 Toshell 代码，必须保留 MIT notice，并在 Ghoul 的修改说明和发布包中记录变更。参考项目与许可证统一列在主 README 末尾。
+## Phase 4：审批式操作
+
+Phase 4 将 Confirm/Danger 操作纳入 Ghoul 的统一策略、审批和证据账本：
+
+- `c2_operations` 记录任务、会话、绑定、工具等级、参数哈希、幂等键、Toshell task id 和最终状态。
+- `c2_operation_approvals` 保存两阶段审批快照；审批令牌使用服务端 HMAC、短 TTL、参数/任务/会话绑定，并只保存 SHA-256 哈希。
+- `c2_evidence` 在 Toshell 任务完成后立即物化输出，避免 sidecar TTL 清除原始证据；输出经过 ANSI/控制字符清理、常见凭据脱敏和不可信内容边界包装。
+- Confirm 工具：`c2_file_list`、`c2_process_list`、`c2_screenshot`、`c2_tunnel`；Danger 工具 `c2_exec` 默认关闭，开启后仍需两个独立审批阶段。
+- 所有人工操作写入 `actor=user`、`source=manual`；审批中心 `/system/c2/approvals` 和操作详情页展示参数哈希、范围快照、审批记录、证据和 Finding 绑定入口。
+- 不使用 iframe；Toshell 管理台仅通过新窗口链接打开。
+
+验证：`go test ./integrations/toshell/approval ./integrations/toshell/policy ./integrations/toshell/sanitize ./integrations/toshell/client ./config`、后端编译和 `pnpm exec tsc --noEmit` 通过。

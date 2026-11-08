@@ -20,7 +20,11 @@ import type {
   BatchCategoryItem,
   BatchControlItem,
   C2Event,
+  C2Evidence,
   C2Listener,
+  C2Operation,
+  C2OperationDetail,
+  C2Security,
   C2Session,
   C2Status,
   C2Task,
@@ -952,6 +956,7 @@ export const api = {
     return get<{ items: VulnIntelHit[]; count: number }>(`/vulnintel/search?${params.toString()}`);
   },
   c2Status: () => get<C2Status>("/c2/health"),
+  c2Security: () => get<C2Security>("/c2/security"),
   c2Sessions: (params: { task?: string; bound?: boolean; status?: string; limit?: number } = {}) => {
     const query = new URLSearchParams();
     if (params.task) query.set("task", params.task);
@@ -972,6 +977,41 @@ export const api = {
   ) => post<C2Session["binding"]>(`/c2/sessions/${encodeURIComponent(sessionId)}/bind`, input),
   unbindC2Session: (sessionId: string) =>
     del<{ unbound: boolean }>(`/c2/sessions/${encodeURIComponent(sessionId)}/bind`),
+  c2Operations: (params: { task_id?: string; status?: string; session_id?: string; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.task_id) query.set("task_id", params.task_id);
+    if (params.status) query.set("status", params.status);
+    if (params.session_id) query.set("session_id", params.session_id);
+    if (params.limit) query.set("limit", String(params.limit));
+    return get<{ items: C2Operation[]; count: number; enabled: boolean }>(`/c2/operations?${query.toString()}`);
+  },
+  c2Operation: (id: string) => get<C2OperationDetail>(`/c2/operations/${encodeURIComponent(id)}`),
+  createC2Operation: (input: {
+    task_id: number;
+    session_id: string;
+    tool: string;
+    action?: string;
+    params?: Record<string, unknown>;
+    idempotency_key?: string;
+  }) => post<{ operation: C2Operation; requires_approval: boolean; status: string }>("/c2/operations", input),
+  challengeC2Operation: (id: string, stage = 1) =>
+    post<{ operation_id: string; stage: number; token: string; expires_at: string; warning: string }>(
+      `/c2/operations/${encodeURIComponent(id)}/challenge`,
+      { stage },
+    ),
+  approveC2Operation: (id: string, input: { stage: number; token: string; reason: string; execute?: boolean }) =>
+    post<{ approval: unknown; operation: C2Operation; all_approved: boolean }>(
+      `/c2/operations/${encodeURIComponent(id)}/approve`,
+      input,
+    ),
+  rejectC2Operation: (id: string, input: { stage: number; reason: string }) =>
+    post<{ operation_id: string; status: string }>(`/c2/operations/${encodeURIComponent(id)}/reject`, input),
+  executeC2Operation: (id: string) => post<C2Operation>(`/c2/operations/${encodeURIComponent(id)}/execute`, {}),
+  bindC2EvidenceFinding: (evidenceId: string, input: { finding_id: number; reason: string }) =>
+    post<{ ok: boolean; evidence_id: string; finding_id: number }>(
+      `/c2/evidence/${encodeURIComponent(evidenceId)}/bind-finding`,
+      input,
+    ),
 
   // ---- 漏洞 IM 推送 ----
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，

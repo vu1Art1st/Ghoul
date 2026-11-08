@@ -38,6 +38,13 @@ func (s *Server) c2Status(w http.ResponseWriter, r *http.Request) {
 	sessions, _ := s.m.pg.ListC2Sessions(r.Context(), db.C2SessionFilter{Limit: 1000})
 	listeners, _ := s.m.pg.ListC2Listeners(r.Context(), instanceID)
 	tasks, _ := s.m.pg.ListC2Tasks(r.Context(), instanceID, "", 1000)
+	operations, _ := s.m.pg.ListC2Operations(r.Context(), db.C2OperationFilter{Limit: 1000})
+	pending := 0
+	for _, op := range operations {
+		if op.Status == "pending_approval" {
+			pending++
+		}
+	}
 	writeJSON(w, 200, map[string]any{
 		"enabled":      true,
 		"status":       instanceStatus(instance),
@@ -47,6 +54,12 @@ func (s *Server) c2Status(w http.ResponseWriter, r *http.Request) {
 		"last_sync_at": lastSync,
 		"counts": map[string]int{
 			"sessions": len(sessions), "listeners": len(listeners), "tasks": len(tasks),
+			"operations": len(operations), "pending_approvals": pending,
+		},
+		"policy": map[string]any{
+			"allow_confirm": s.c2.cfg.AllowConfirm, "allow_danger": s.c2.cfg.AllowDanger,
+			"allow_tunnel": s.c2.cfg.AllowTunnel, "approval_ttl_seconds": s.c2.cfg.ApprovalTTLSeconds,
+			"danger_approvals": s.c2.cfg.DangerApprovals,
 		},
 	})
 }

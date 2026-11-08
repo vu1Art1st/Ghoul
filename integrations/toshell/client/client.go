@@ -4,14 +4,19 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -24,9 +29,12 @@ var (
 )
 
 type Config struct {
-	BaseURL   string
-	APIKeyRef string
-	Timeout   time.Duration
+	BaseURL           string
+	APIKeyRef         string
+	Timeout           time.Duration
+	AllowedHosts      []string
+	AllowInsecureHTTP bool
+	TLSCAFile         string
 }
 
 type Client struct {
@@ -81,6 +89,8 @@ type Task struct {
 	SentAt      *time.Time `json:"sent_at,omitempty"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	Output      string     `json:"output,omitempty"`
+	OutputB64   string     `json:"output_b64,omitempty"`
+	OutputBytes int        `json:"output_bytes,omitempty"`
 	Error       string     `json:"error,omitempty"`
 	ExitCode    int32      `json:"exit_code"`
 	Timeout     uint32     `json:"timeout"`
@@ -88,6 +98,29 @@ type Task struct {
 	PID         uint32     `json:"pid,omitempty"`
 	Data        string     `json:"data,omitempty"`
 	Progress    int        `json:"progress,omitempty"`
+}
+
+type TaskRef struct {
+	TaskID   uint64         `json:"task_id"`
+	TaskType string         `json:"task_type,omitempty"`
+	Message  string         `json:"message,omitempty"`
+	Path     string         `json:"path,omitempty"`
+	Params   map[string]any `json:"params,omitempty"`
+}
+
+type Tunnel struct {
+	ID          string `json:"id"`
+	SessionID   string `json:"session_id"`
+	Status      string `json:"status"`
+	Listening   bool   `json:"listening"`
+	LocalPort   int    `json:"local_port"`
+	Protocol    string `json:"protocol,omitempty"`
+	Mode        string `json:"mode,omitempty"`
+	TargetAddr  string `json:"target_addr,omitempty"`
+	Remark      string `json:"remark,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+	SessionHost string `json:"session_host,omitempty"`
+	SessionUser string `json:"session_user,omitempty"`
 }
 
 type Listener struct {
@@ -161,6 +194,16 @@ func ResolveAPIKey(ref string) (string, error) {
 		if path == "" {
 			return "", ErrMissingAPIKey
 		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", fmt.Errorf("%w: stat %s: %v", ErrMissingAPIKey, path, err)
+		}
+		if info.Size() <= 0 || info.Size() > 64<<10 {
+			return "", fmt.Errorf("%w: file %s has an invalid size", ErrMissingAPIKey, path)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+			return "", fmt.Errorf("%w: file %s must not be group/world accessible", ErrMissingAPIKey, path)
+		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("%w: read %s: %v", ErrMissingAPIKey, path, err)
@@ -187,6 +230,12 @@ func New(cfg Config) (*Client, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, errors.New("Toshell base_url must use http or https")
 	}
+	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) && !cfg.AllowInsecureHTTP {
+		return nil, errors.New("non-loopback Toshell base_url requires https or c2.allow_insecure_http")
+	}
+	if !hostAllowed(u.Hostname(), cfg.AllowedHosts) {
+		return nil, fmt.Errorf("Toshell host %q is not in c2.allowed_hosts", u.Hostname())
+	}
 	apiKey, err := ResolveAPIKey(cfg.APIKeyRef)
 	if err != nil {
 		return nil, err
@@ -195,11 +244,63 @@ func New(cfg Config) (*Client, error) {
 	if timeout <= 0 {
 		timeout = 12 * time.Second
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil // the sidecar connection must never inherit an agent proxy
+	if u.Scheme == "https" {
+		tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+		if strings.TrimSpace(cfg.TLSCAFile) != "" {
+			ca, err := os.ReadFile(cfg.TLSCAFile)
+			if err != nil {
+				return nil, fmt.Errorf("read c2.tls_ca_file: %w", err)
+			}
+			pool, err := x509.SystemCertPool()
+			if err != nil || pool == nil {
+				pool = x509.NewCertPool()
+			}
+			if !pool.AppendCertsFromPEM(ca) {
+				return nil, errors.New("c2.tls_ca_file contains no valid certificates")
+			}
+			tlsCfg.RootCAs = pool
+		}
+		transport.TLSClientConfig = tlsCfg
+	}
+	httpClient := &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) == 0 || !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+				return errors.New("Toshell redirects must stay on the configured host")
+			}
+			return nil
+		},
+	}
 	return &Client{
 		baseURL: baseURL,
 		apiKey:  apiKey,
-		http:    &http.Client{Timeout: timeout},
+		http:    httpClient,
 	}, nil
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func hostAllowed(host string, allowed []string) bool {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if len(allowed) == 0 {
+		return isLoopbackHost(host)
+	}
+	for _, item := range allowed {
+		if strings.EqualFold(strings.TrimSpace(item), host) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) BaseURL() string { return c.baseURL }
@@ -284,6 +385,154 @@ func (c *Client) ChannelsHealth(ctx context.Context) (*ChannelHealth, error) {
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (c *Client) SubmitCommand(ctx context.Context, sessionID, command string, timeoutSec uint32) (*TaskRef, error) {
+	body := map[string]any{"session_id": sessionID, "command": command, "task_type": "command"}
+	if timeoutSec > 0 {
+		body["timeout"] = timeoutSec
+	}
+	var out TaskRef
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tasks", body, &out, false); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) FileList(ctx context.Context, sessionID, path string) (*TaskRef, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, errors.New("file path is required")
+	}
+	var out TaskRef
+	endpoint := "/api/v1/sessions/" + url.PathEscape(sessionID) + "/files?path=" + url.QueryEscape(path)
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, nil, &out, false); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) ProcessList(ctx context.Context, sessionID string) (*TaskRef, error) {
+	var out TaskRef
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/processes", nil, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) Screenshot(ctx context.Context, sessionID string, options map[string]any) (*TaskRef, error) {
+	var out TaskRef
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/screenshot", options, &out, false); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) InvokeTool(ctx context.Context, name string, params map[string]string) (map[string]any, error) {
+	var out map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/mcp/tools/"+url.PathEscape(name), params, &out, false); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) Tunnels(ctx context.Context) ([]Tunnel, error) {
+	var out struct {
+		Servers []Tunnel `json:"servers"`
+		Count   int      `json:"count"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/tunnels", nil, &out, true); err != nil {
+		return nil, err
+	}
+	return out.Servers, nil
+}
+
+func (c *Client) StartTunnel(ctx context.Context, sessionID string, localPort int, remark string) (map[string]any, error) {
+	body := map[string]any{"session_id": sessionID, "local_port": localPort, "remark": remark}
+	var out map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tunnels", body, &out, false); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) CloseTunnel(ctx context.Context, id string) (map[string]any, error) {
+	var out map[string]any
+	if err := c.doJSON(ctx, http.MethodDelete, "/api/v1/tunnels/"+url.PathEscape(id), nil, &out, false); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) TaskRaw(ctx context.Context, id string) (*Task, error) {
+	var out Task
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/tasks/"+url.PathEscape(id)+"?raw=1", nil, &out, true); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) doJSON(ctx context.Context, method, path string, body any, dst any, retry bool) error {
+	var payload []byte
+	if body != nil {
+		var err error
+		payload, err = json.Marshal(body)
+		if err != nil {
+			return err
+		}
+	}
+	attempts := 1
+	if retry && method == http.MethodGet {
+		attempts = 3
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * 250 * time.Millisecond):
+			}
+		}
+		var reader io.Reader
+		if payload != nil {
+			reader = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("X-API-Key", c.apiKey)
+		req.Header.Set("Accept", "application/json")
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := c.http.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("%w: %s %s: HTTP %d: %s", ErrUpstreamStatus, method, path, resp.StatusCode, truncate(string(raw), 256))
+			if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+				return lastErr
+			}
+			continue
+		}
+		if dst != nil {
+			if err := json.Unmarshal(raw, dst); err != nil {
+				return fmt.Errorf("decode %s: %w", path, err)
+			}
+		}
+		return nil
+	}
+	return lastErr
 }
 
 func (c *Client) get(ctx context.Context, path string, dst any) ([]byte, error) {

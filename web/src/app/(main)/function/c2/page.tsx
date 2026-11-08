@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Activity, Link2, Loader2, Monitor, RefreshCw, Server, Unlink } from "lucide-react";
+import Link from "next/link";
+import { Activity, ClipboardCheck, ExternalLink, Link2, Loader2, Monitor, RefreshCw, Server, Unlink } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,10 @@ export default function C2Page() {
   const [binding, setBinding] = React.useState(false);
   const [taskId, setTaskId] = React.useState("");
   const [assetId, setAssetId] = React.useState("");
+  const [manualTool, setManualTool] = React.useState("c2_recon");
+  const [manualAction, setManualAction] = React.useState("system_info");
+  const [manualValue, setManualValue] = React.useState("");
+  const [manualBusy, setManualBusy] = React.useState(false);
   const [reason, setReason] = React.useState("确认会话归属后绑定");
 
   const selected = sessions.find((item) => item.session_id === selectedId);
@@ -107,6 +112,45 @@ export default function C2Page() {
     }
   }
 
+  async function createManualOperation() {
+    if (!selected?.binding) {
+      toast.error("请先将会话绑定到当前 Ghoul 任务");
+      return;
+    }
+    const params: Record<string, unknown> = {};
+    if (manualTool === "c2_recon") params.action = manualAction;
+    if (manualTool === "c2_file_list") params.path = manualValue;
+    if (manualTool === "c2_tunnel") {
+      params.action = manualAction;
+      if (manualValue.trim()) params.local_port = Number(manualValue);
+    }
+    if (manualTool === "c2_exec") params.command = manualValue;
+    setManualBusy(true);
+    try {
+      const created = await api.createC2Operation({
+        task_id: Number(selected.binding.task_id),
+        session_id: selected.session_id,
+        tool: manualTool,
+        action: manualTool === "c2_recon" || manualTool === "c2_tunnel" ? manualAction : undefined,
+        params,
+      });
+      let operation = created.operation;
+      if (operation.status === "approved") {
+        operation = await api.executeC2Operation(operation.id);
+      }
+      toast.success(
+        operation.status === "pending_approval"
+          ? `操作 #${operation.id} 已创建，请在审批中心处理`
+          : `操作 #${operation.id} 已提交`,
+      );
+      setManualValue("");
+    } catch (error) {
+      toast.error(`创建 C2 操作失败: ${error}`);
+    } finally {
+      setManualBusy(false);
+    }
+  }
+
   const instance = status?.instance;
 
   return (
@@ -117,6 +161,14 @@ export default function C2Page() {
           <h1 className="text-lg font-semibold">C2 会话</h1>
           <Badge variant={status?.enabled ? "default" : "secondary"}>{status?.enabled ? status.status : "未启用"}</Badge>
           {status?.cursor?.status ? <Badge variant="outline">事件 {status.cursor.status}</Badge> : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/system/c2/approvals">
+              <ClipboardCheck />
+              审批中心
+            </Link>
+          </Button>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={loading ? "animate-spin" : ""} />
@@ -138,7 +190,16 @@ export default function C2Page() {
                 <CardTitle className="text-xs text-muted-foreground">实例</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="truncate text-lg font-semibold">{instance?.name || "Toshell"}</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="truncate text-lg font-semibold">{instance?.name || "Toshell"}</div>
+                  {instance?.base_url ? (
+                    <Button variant="ghost" size="icon" asChild>
+                      <a href={instance.base_url} target="_blank" rel="noreferrer">
+                        <ExternalLink />
+                      </a>
+                    </Button>
+                  ) : null}
+                </div>
                 <div className="text-muted-foreground truncate text-xs">{instance?.base_url}</div>
               </CardContent>
             </Card>
@@ -267,6 +328,72 @@ export default function C2Page() {
                         </Button>
                       </div>
                     )}
+                    <div className="space-y-2 rounded-md border p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-medium">人工 C2 操作</div>
+                        <Badge variant="outline">actor=user / source=manual</Badge>
+                      </div>
+                      <select
+                        className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                        value={manualTool}
+                        onChange={(event) => setManualTool(event.target.value)}
+                      >
+                        <option value="c2_recon">系统信息 / 只读侦察</option>
+                        <option value="c2_file_list">文件列表</option>
+                        <option value="c2_process_list">进程列表</option>
+                        <option value="c2_screenshot">截图</option>
+                        <option value="c2_tunnel">隧道</option>
+                        <option value="c2_exec">命令执行（Danger）</option>
+                      </select>
+                      {manualTool === "c2_recon" || manualTool === "c2_tunnel" ? (
+                        <select
+                          className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                          value={manualAction}
+                          onChange={(event) => setManualAction(event.target.value)}
+                        >
+                          {manualTool === "c2_recon" ? (
+                            <>
+                              <option value="system_info">system_info</option>
+                              <option value="user_info">user_info</option>
+                              <option value="net_info">net_info</option>
+                              <option value="net_connections">net_connections</option>
+                              <option value="env_vars">env_vars</option>
+                              <option value="scheduled_tasks">scheduled_tasks</option>
+                            </>
+                          ) : (
+                            <>
+                              <option value="list">list</option>
+                              <option value="start">start</option>
+                              <option value="stop">stop</option>
+                            </>
+                          )}
+                        </select>
+                      ) : null}
+                      {manualTool === "c2_file_list" ||
+                      manualTool === "c2_exec" ||
+                      (manualTool === "c2_tunnel" && manualAction !== "list") ? (
+                        <Input
+                          value={manualValue}
+                          onChange={(event) => setManualValue(event.target.value)}
+                          placeholder={
+                            manualTool === "c2_file_list"
+                              ? "目录路径"
+                              : manualTool === "c2_exec"
+                                ? "命令"
+                                : "本地端口"
+                          }
+                        />
+                      ) : null}
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => void createManualOperation()}
+                        disabled={manualBusy || !selected.binding}
+                      >
+                        {manualBusy ? <Loader2 className="animate-spin" /> : <ClipboardCheck />}
+                        创建操作
+                      </Button>
+                    </div>
                     <Tabs defaultValue="tasks">
                       <TabsList>
                         <TabsTrigger value="tasks">任务</TabsTrigger>

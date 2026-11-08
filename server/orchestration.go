@@ -62,6 +62,11 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 		deferred["c2_session_list"] = []string{"planner", "worker"}
 		deferred["c2_session_context"] = []string{"planner", "worker"}
 		deferred["c2_recon"] = []string{"planner", "worker"}
+		deferred["c2_file_list"] = []string{"worker"}
+		deferred["c2_process_list"] = []string{"worker"}
+		deferred["c2_screenshot"] = []string{"worker"}
+		deferred["c2_tunnel"] = []string{"worker"}
+		deferred["c2_exec"] = []string{"worker"}
 	}
 	return tools, deferred
 }

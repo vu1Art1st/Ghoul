@@ -30,12 +30,21 @@ const DefaultC2Provider = "toshell"
 // C2Config controls the optional Toshell C2 adapter. The adapter is disabled by
 // default and APIKeyRef must always be a secret reference, never the key itself.
 type C2Config struct {
-	Enabled      bool   `json:"enabled"`
-	Provider     string `json:"provider"`
-	BaseURL      string `json:"base_url"`
-	APIKeyRef    string `json:"api_key_ref"`
-	AllowConfirm bool   `json:"allow_confirm"`
-	AllowDanger  bool   `json:"allow_danger"`
+	Enabled                bool     `json:"enabled"`
+	Provider               string   `json:"provider"`
+	BaseURL                string   `json:"base_url"`
+	APIKeyRef              string   `json:"api_key_ref"`
+	AllowConfirm           bool     `json:"allow_confirm"`
+	AllowDanger            bool     `json:"allow_danger"`
+	AllowTunnel            bool     `json:"allow_tunnel"`
+	AllowUnscopedTasks     bool     `json:"allow_unscoped_tasks"`
+	DangerApprovals        int      `json:"danger_approvals"`
+	ApprovalTTLSeconds     int      `json:"approval_ttl_seconds"`
+	MaxOperationsPerMinute int      `json:"max_operations_per_minute"`
+	OutputMaxBytes         int      `json:"output_max_bytes"`
+	AllowedHosts           []string `json:"allowed_hosts"`
+	AllowInsecureHTTP      bool     `json:"allow_insecure_http"`
+	TLSCAFile              string   `json:"tls_ca_file"`
 }
 
 // Config is the on-disk config file shape.
@@ -141,6 +150,31 @@ func (c Config) EffectiveC2() C2Config {
 	}
 	if !c2.AllowConfirm {
 		c2.AllowDanger = false
+		c2.AllowTunnel = false
+	}
+	if c2.DangerApprovals < 1 {
+		c2.DangerApprovals = 2
+	}
+	if c2.DangerApprovals > 2 {
+		c2.DangerApprovals = 2
+	}
+	if c2.ApprovalTTLSeconds < 60 {
+		c2.ApprovalTTLSeconds = 300
+	}
+	if c2.ApprovalTTLSeconds > 3600 {
+		c2.ApprovalTTLSeconds = 3600
+	}
+	if c2.MaxOperationsPerMinute < 1 {
+		c2.MaxOperationsPerMinute = 30
+	}
+	if c2.MaxOperationsPerMinute > 600 {
+		c2.MaxOperationsPerMinute = 600
+	}
+	if c2.OutputMaxBytes < 4096 {
+		c2.OutputMaxBytes = 256 << 10
+	}
+	if c2.OutputMaxBytes > 4<<20 {
+		c2.OutputMaxBytes = 4 << 20
 	}
 	return c2
 }

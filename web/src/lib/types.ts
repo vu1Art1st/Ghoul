@@ -1841,5 +1841,110 @@ export interface C2Status {
   };
   last_error?: string;
   last_sync_at?: string;
-  counts?: { sessions: number; listeners: number; tasks: number };
+  counts?: {
+    sessions: number;
+    listeners: number;
+    tasks: number;
+    operations?: number;
+    pending_approvals?: number;
+  };
+  policy?: {
+    allow_confirm: boolean;
+    allow_danger: boolean;
+    allow_tunnel: boolean;
+    approval_ttl_seconds: number;
+    danger_approvals: number;
+  };
+}
+
+export type C2Level = "read" | "confirm" | "danger";
+export type C2OperationStatus =
+  | "pending_approval"
+  | "approved"
+  | "dispatching"
+  | "dispatched"
+  | "running"
+  | "completed"
+  | "failed"
+  | "denied"
+  | "expired"
+  | "cancelled";
+
+export interface C2Operation {
+  id: string;
+  instance_id: string;
+  task_id: string;
+  c2_session_id: string;
+  binding_id?: string;
+  tool: string;
+  action: string;
+  level: C2Level;
+  actor: string;
+  source: string;
+  params: Record<string, unknown>;
+  params_hash: string;
+  idempotency_key: string;
+  status: C2OperationStatus;
+  approval_required: boolean;
+  approval_stages: number;
+  scope_snapshot: Array<Record<string, string>>;
+  external_task_id?: number;
+  output_summary?: string;
+  output_sha256?: string;
+  error?: string;
+  requested_at: string;
+  approved_at?: string;
+  dispatched_at?: string;
+  completed_at?: string;
+  expires_at?: string;
+  approval?: C2OperationApproval;
+}
+
+export interface C2OperationApproval {
+  id: string;
+  operation_id: string;
+  stage: number;
+  params_hash: string;
+  task_snapshot: Record<string, unknown>;
+  session_snapshot: Record<string, unknown>;
+  status: "pending" | "approved" | "rejected" | "consumed" | "expired";
+  approved_by?: string;
+  approved_at?: string;
+  consumed_at?: string;
+  reason?: string;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface C2Evidence {
+  id: string;
+  operation_id: string;
+  task_id: string;
+  c2_session_id: string;
+  finding_id?: string;
+  kind: string;
+  title: string;
+  mime: string;
+  content?: string;
+  storage_ref?: string;
+  sha256: string;
+  size: number;
+  redacted: boolean;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface C2OperationDetail {
+  operation: C2Operation;
+  approvals: C2OperationApproval[];
+  evidence: C2Evidence[];
+  scope: Array<Record<string, string>>;
+}
+
+export interface C2Security {
+  ok: boolean;
+  checks: Array<{ name: string; ok: boolean; detail: string }>;
+  warnings?: string[];
+  notes?: string[];
+  policy?: Record<string, unknown>;
 }
