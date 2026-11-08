@@ -254,6 +254,7 @@ func (s *c2Service) submitOperation(ctx context.Context, req c2OperationRequest)
 		return nil, policy.ErrRateLimited
 	}
 	redacted, _ := json.Marshal(c2RedactParams(req.Params, s.cfg.OutputMaxBytes))
+	executionParams, _ := json.Marshal(req.Params)
 	ttl := s.cfg.ApprovalTTLSeconds
 	if ttl <= 0 {
 		ttl = 300
@@ -267,7 +268,7 @@ func (s *c2Service) submitOperation(ctx context.Context, req c2OperationRequest)
 		InstanceID: s.instanceID, TaskID: req.TaskID, C2SessionID: session.ID,
 		BindingID: session.Binding.ID, Tool: req.Tool, Action: req.Action,
 		Level: string(action.Level), Actor: req.Actor, Source: req.Source,
-		ParamsJSON: redacted, ParamsHash: paramsHash, IdempotencyKey: req.IdempotencyKey,
+		ParamsJSON: redacted, ExecutionParams: executionParams, ParamsHash: paramsHash, IdempotencyKey: req.IdempotencyKey,
 		Status: status, ApprovalRequired: decision.ApprovalNeeded,
 		ApprovalStages: decision.ApprovalStages, ScopeSnapshot: scopeRaw, ExpiresAt: &expiry,
 	})
@@ -410,7 +411,11 @@ func (s *c2Service) dispatchOperation(ctx context.Context, op *db.C2Operation) (
 		return 0, false, db.C2Evidence{}, errors.New("C2 session no longer exists")
 	}
 	var params map[string]any
-	_ = json.Unmarshal(op.ParamsJSON, &params)
+	rawParams := op.ExecutionParams
+	if len(rawParams) == 0 {
+		rawParams = op.ParamsJSON
+	}
+	_ = json.Unmarshal(rawParams, &params)
 	action := strings.ToLower(strings.TrimSpace(op.Action))
 	if action == "" {
 		action, _ = params["action"].(string)

@@ -27,6 +27,7 @@ type C2Operation struct {
 	Actor            string               `json:"actor"`
 	Source           string               `json:"source"`
 	ParamsJSON       json.RawMessage      `json:"params"`
+	ExecutionParams  json.RawMessage      `json:"-"`
 	ParamsHash       string               `json:"params_hash"`
 	IdempotencyKey   string               `json:"idempotency_key"`
 	Status           string               `json:"status"`
@@ -57,6 +58,7 @@ type C2OperationInput struct {
 	Actor            string
 	Source           string
 	ParamsJSON       json.RawMessage
+	ExecutionParams  json.RawMessage
 	ParamsHash       string
 	IdempotencyKey   string
 	Status           string
@@ -67,17 +69,17 @@ type C2OperationInput struct {
 }
 
 const c2OperationCols = `id,instance_id,task_id,c2_session_id,binding_id,tool,action,level,
-	actor,source,params_json,params_hash,idempotency_key,status,approval_required,
+	actor,source,params_json,execution_params_json,params_hash,idempotency_key,status,approval_required,
 	approval_stages,scope_snapshot,external_task_id,output_summary,output_sha256,error,
 	requested_at,approved_at,dispatched_at,completed_at,expires_at,updated_at`
 
 func scanC2Operation(row interface{ Scan(...any) error }) (*C2Operation, error) {
 	var item C2Operation
-	var params, scope []byte
+	var params, executionParams, scope []byte
 	var binding sql.NullInt64
 	var approved, dispatched, completed, expires sql.NullTime
 	err := row.Scan(&item.ID, &item.InstanceID, &item.TaskID, &item.C2SessionID, &binding,
-		&item.Tool, &item.Action, &item.Level, &item.Actor, &item.Source, &params,
+		&item.Tool, &item.Action, &item.Level, &item.Actor, &item.Source, &params, &executionParams,
 		&item.ParamsHash, &item.IdempotencyKey, &item.Status, &item.ApprovalRequired,
 		&item.ApprovalStages, &scope, &item.ExternalTaskID, &item.OutputSummary,
 		&item.OutputSHA256, &item.Error, &item.RequestedAt, &approved, &dispatched,
@@ -91,7 +93,7 @@ func scanC2Operation(row interface{ Scan(...any) error }) (*C2Operation, error) 
 	if binding.Valid {
 		item.BindingID = &binding.Int64
 	}
-	item.ParamsJSON, item.ScopeSnapshot = params, scope
+	item.ParamsJSON, item.ExecutionParams, item.ScopeSnapshot = params, executionParams, scope
 	if approved.Valid {
 		item.ApprovedAt = &approved.Time
 	}
@@ -129,6 +131,9 @@ func (d *DB) CreateC2Operation(ctx context.Context, in C2OperationInput) (*C2Ope
 	if len(in.ParamsJSON) == 0 {
 		in.ParamsJSON = json.RawMessage(`{}`)
 	}
+	if len(in.ExecutionParams) == 0 {
+		in.ExecutionParams = in.ParamsJSON
+	}
 	if len(in.ScopeSnapshot) == 0 {
 		in.ScopeSnapshot = json.RawMessage(`[]`)
 	}
@@ -141,20 +146,20 @@ func (d *DB) CreateC2Operation(ctx context.Context, in C2OperationInput) (*C2Ope
 		expires = *in.ExpiresAt
 	}
 	var item C2Operation
-	var params, scope []byte
+	var params, executionParams, scope []byte
 	var scanBinding sql.NullInt64
 	var approved, dispatched, completed, expiresAt sql.NullTime
 	err := d.QueryRowContext(ctx, `INSERT INTO c2_operations
 		(instance_id,task_id,c2_session_id,binding_id,tool,action,level,actor,source,
-		 params_json,params_hash,idempotency_key,status,approval_required,approval_stages,
+		 params_json,execution_params_json,params_hash,idempotency_key,status,approval_required,approval_stages,
 		 scope_snapshot,expires_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		RETURNING `+c2OperationCols,
 		in.InstanceID, in.TaskID, in.C2SessionID, binding, in.Tool, in.Action, in.Level,
-		in.Actor, in.Source, string(in.ParamsJSON), in.ParamsHash, in.IdempotencyKey,
+		in.Actor, in.Source, string(in.ParamsJSON), string(in.ExecutionParams), in.ParamsHash, in.IdempotencyKey,
 		in.Status, in.ApprovalRequired, in.ApprovalStages, string(in.ScopeSnapshot), expires).
 		Scan(&item.ID, &item.InstanceID, &item.TaskID, &item.C2SessionID, &scanBinding,
-			&item.Tool, &item.Action, &item.Level, &item.Actor, &item.Source, &params,
+			&item.Tool, &item.Action, &item.Level, &item.Actor, &item.Source, &params, &executionParams,
 			&item.ParamsHash, &item.IdempotencyKey, &item.Status, &item.ApprovalRequired,
 			&item.ApprovalStages, &scope, &item.ExternalTaskID, &item.OutputSummary,
 			&item.OutputSHA256, &item.Error, &item.RequestedAt, &approved, &dispatched,
@@ -165,7 +170,7 @@ func (d *DB) CreateC2Operation(ctx context.Context, in C2OperationInput) (*C2Ope
 	if scanBinding.Valid {
 		item.BindingID = &scanBinding.Int64
 	}
-	item.ParamsJSON, item.ScopeSnapshot = params, scope
+	item.ParamsJSON, item.ExecutionParams, item.ScopeSnapshot = params, executionParams, scope
 	if approved.Valid {
 		item.ApprovedAt = &approved.Time
 	}

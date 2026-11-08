@@ -1485,6 +1485,7 @@ CREATE TABLE IF NOT EXISTS c2_operations (
     actor              TEXT NOT NULL DEFAULT 'agent',
     source             TEXT NOT NULL DEFAULT 'agent',
     params_json        JSONB NOT NULL DEFAULT '{}',
+    execution_params_json JSONB NOT NULL DEFAULT '{}',
     params_hash        TEXT NOT NULL,
     idempotency_key    TEXT NOT NULL,
     status             TEXT NOT NULL DEFAULT 'pending_approval'
@@ -1506,6 +1507,7 @@ CREATE TABLE IF NOT EXISTS c2_operations (
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (instance_id, idempotency_key)
 );
+ALTER TABLE c2_operations ADD COLUMN IF NOT EXISTS execution_params_json JSONB NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_c2_operations_task
     ON c2_operations(task_id, requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_c2_operations_status
