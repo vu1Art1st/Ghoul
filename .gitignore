@@ -1,8 +1,12 @@
 # backend
 /data/
+/pgdata/
+/migration-backups/
 *.db
 *.db-wal
 *.db-shm
+*.dump
+*.dump.sha256
 config.json
 scheduler_state.json
 __pycache__/

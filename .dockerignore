@@ -1,4 +1,5 @@
 .git
+.tmp
 **/node_modules
 web/.next
 web/out
@@ -7,6 +8,11 @@ server/webui/dist
 /ghoul
 /ghoul.exe
 data
+pgdata
+migration-backups
+jwt.key
+*.dump
+*.dump.sha256
 *.db
 transcripts
 bench/kv
