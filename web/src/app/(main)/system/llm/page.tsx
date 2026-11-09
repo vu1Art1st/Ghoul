@@ -573,6 +573,9 @@ function ProfileSheet({
               onChange={(e) => setProxy(e.target.value)}
             />
             <p className="text-muted-foreground text-xs">
+              Docker/WSL 访问宿主机回环服务时使用 <code>socks5://host.docker.internal:11080</code>。
+            </p>
+            <p className="text-muted-foreground text-xs">
               仅 LLM 出站请求走此代理，支持 http/https/socks5，可带账号密码（如
               socks5://user:pass@host:port，密码含特殊字符需 URL 编码）；留空表示不使用代理（直连）。
             </p>

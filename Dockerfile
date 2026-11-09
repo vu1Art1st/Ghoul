@@ -31,7 +31,8 @@ RUN go mod download
 COPY . .
 # 前端静态产物从 web 阶段拷入（.dockerignore 已排除宿主 dist，不会冲突）
 COPY --from=web /web/out/ server/webui/dist/
-RUN CGO_ENABLED=0 GOARCH="${TARGETARCH}" go build -tags embedui -trimpath -o /out/ghoul ./cmd/ghoul
+RUN CGO_ENABLED=0 GOARCH="${TARGETARCH}" go build -tags embedui -trimpath -o /out/ghoul ./cmd/ghoul && \
+    CGO_ENABLED=0 GOARCH="${TARGETARCH}" go build -trimpath -o /out/hostproxy ./cmd/hostproxy
 
 ########## 阶段 3：运行镜像（同原版：工具 + Playwright 预装）##########
 FROM python:3.12-slim-bookworm
@@ -59,11 +60,12 @@ RUN npm install -g @playwright/mcp@latest @playwright/cli@latest playwright@late
 WORKDIR /app
 # 构建阶段产出的单二进制（内嵌前端）
 COPY --from=gobuild /out/ghoul /app/ghoul
+COPY --from=gobuild /out/hostproxy /app/hostproxy
 # 守护启动脚本：进程退出后按退出码决定是否重新拉起，页面一键更新靠它完成换装。
 # 它同时负责把 SIGTERM 转发给 ghoul —— docker stop 只把信号发给 PID 1，
 # 不转发的话 ghoul 收不到、做不了优雅关闭，10 秒后被 SIGKILL 硬杀。
 COPY start.sh /app/start.sh
-RUN chmod +x /app/ghoul /app/start.sh
+RUN chmod +x /app/ghoul /app/hostproxy /app/start.sh
 COPY skills/ /app/skills/
 # data/（SQLite + jwt.key）持久化点
 VOLUME ["/app/data"]

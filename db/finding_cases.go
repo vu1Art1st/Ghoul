@@ -178,6 +178,8 @@ func lockFindingCaseTask(tx *sql.Tx, taskID int64) error {
 }
 
 // MergeFindingCase groups findings from one task without copying evidence.
+// taskID may be zero: the task is then inferred from the finding rows, which is
+// the normal UI path because finding IDs already carry their owning task.
 func (d *DB) MergeFindingCase(ctx context.Context, taskID int64, ids []int64, title, reason, actor string) (int64, error) {
 	ids, err := sortedFindingIDs(ids)
 	if err != nil {
@@ -189,24 +191,37 @@ func (d *DB) MergeFindingCase(ctx context.Context, taskID int64, ids []int64, ti
 	}
 	var caseID int64
 	err = d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
-		if err := lockFindingCaseTask(tx, taskID); err != nil {
-			return err
-		}
 		groupSet := map[int64]bool{}
+		derivedTaskID := int64(0)
 		for _, id := range ids {
 			var task sql.NullInt64
 			var currentCase int64
 			if err := tx.QueryRow(`SELECT f.task_id,COALESCE(m.case_id,0)
 				FROM findings f LEFT JOIN finding_case_members m ON m.finding_id=f.id
 				WHERE f.id=$1`, id).Scan(&task, &currentCase); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("漏洞 #%d 不存在", id)
+				}
 				return err
 			}
-			if !task.Valid || task.Int64 != taskID {
+			if !task.Valid {
+				return errors.New("存在未关联任务的漏洞，无法归并")
+			}
+			if derivedTaskID == 0 {
+				derivedTaskID = task.Int64
+			} else if task.Int64 != derivedTaskID {
 				return errors.New("只能归并同一任务的漏洞")
 			}
 			if currentCase > 0 {
 				groupSet[currentCase] = true
 			}
+		}
+		if taskID > 0 && taskID != derivedTaskID {
+			return errors.New("所选漏洞不属于指定任务")
+		}
+		taskID = derivedTaskID
+		if err := lockFindingCaseTask(tx, taskID); err != nil {
+			return err
 		}
 		groups := make([]int64, 0, len(groupSet))
 		for id := range groupSet {
@@ -220,6 +235,12 @@ func (d *DB) MergeFindingCase(ctx context.Context, taskID int64, ids []int64, ti
 				VALUES($1,$1,$2,$3) RETURNING id`, taskID, title, reason).Scan(&caseID); err != nil {
 				return err
 			}
+		}
+		var oldTitle, oldReason string
+		var active bool
+		if err := tx.QueryRow(`SELECT title,reason,active FROM finding_cases WHERE id=$1 FOR UPDATE`, caseID).
+			Scan(&oldTitle, &oldReason, &active); err != nil {
+			return err
 		}
 		raw, _ := json.Marshal(ids)
 		changed := int64(0)
@@ -235,14 +256,36 @@ func (d *DB) MergeFindingCase(ctx context.Context, taskID int64, ids []int64, ti
 			changed += n
 		}
 		for _, old := range groups {
-			if old != caseID {
-				if _, err := tx.Exec(`UPDATE finding_cases SET active=false,version=version+1 WHERE id=$1`, old); err != nil {
+			if old == caseID {
+				continue
+			}
+			var remaining int
+			if err := tx.QueryRow(`SELECT count(*) FROM finding_case_members WHERE case_id=$1`, old).
+				Scan(&remaining); err != nil {
+				return err
+			}
+			if remaining >= 2 {
+				// Other findings still form a valid group; only the selected
+				// members moved out, so keep the source group active.
+				if _, err := tx.Exec(`UPDATE finding_cases SET version=version+1 WHERE id=$1`, old); err != nil {
 					return err
 				}
+				continue
+			}
+			if _, err := tx.Exec(`DELETE FROM finding_case_members WHERE case_id=$1`, old); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`UPDATE finding_cases SET active=false,version=version+1 WHERE id=$1`, old); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`INSERT INTO finding_case_events(case_id,action,actor,reason,finding_ids)
+				VALUES($1,'dissolved','system',$2,'[]'::jsonb)`, old,
+				fmt.Sprintf("归并到漏洞组 #%d 后成员不足两条", caseID)); err != nil {
+				return err
 			}
 		}
-		if changed > 0 {
-			if _, err := tx.Exec(`UPDATE finding_cases SET title=$2,reason=$3,version=version+1 WHERE id=$1`,
+		if changed > 0 || oldTitle != title || oldReason != reason || !active {
+			if _, err := tx.Exec(`UPDATE finding_cases SET title=$2,reason=$3,active=true,version=version+1 WHERE id=$1`,
 				caseID, title, reason); err != nil {
 				return err
 			}
@@ -253,6 +296,34 @@ func (d *DB) MergeFindingCase(ctx context.Context, taskID int64, ids []int64, ti
 		return nil
 	})
 	return caseID, err
+}
+
+// DeleteFindingCase removes a case and its membership/event rows. Findings and
+// their evidence stay intact; deleting a delivery grouping must never delete the
+// underlying vulnerability records.
+func (d *DB) DeleteFindingCase(ctx context.Context, caseID int64) error {
+	if caseID <= 0 {
+		return errors.New("无效漏洞组编号")
+	}
+	return d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
+		var id int64
+		if err := tx.QueryRow(`SELECT id FROM finding_cases WHERE id=$1 FOR UPDATE`, caseID).Scan(&id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("漏洞组不存在")
+			}
+			return err
+		}
+		// Delete members first so the existing member trigger can finish while
+		// the parent case is still present. Then remove all generated audit rows.
+		if _, err := tx.Exec(`DELETE FROM finding_case_members WHERE case_id=$1`, caseID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM finding_case_events WHERE case_id=$1`, caseID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`DELETE FROM finding_cases WHERE id=$1`, caseID)
+		return err
+	})
 }
 
 func (d *DB) DetachFindingCaseMember(ctx context.Context, caseID, findingID int64, actor, reason string) error {

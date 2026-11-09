@@ -48,6 +48,7 @@ import type {
   FindingAssetTree,
   FindingCase,
   FindingCaseDetail,
+  FindingCaseSuggestion,
   FindingDeepenResponse,
   FindingEvidence,
   FindingEvidenceTimeline,
@@ -776,17 +777,23 @@ export const api = {
   },
   findingCase: (id: string) =>
     get<FindingCaseDetail>(`/exploration/finding-cases/${encodeURIComponent(id)}`),
-  mergeFindingCases: (taskId: string, findingIds: string[], title: string, reason: string) =>
+  mergeFindingCases: (taskId: string | undefined, findingIds: string[], title: string, reason: string) =>
     post<FindingCase>("/exploration/finding-cases", {
-      task_id: Number(taskId),
+      ...(taskId ? { task_id: Number(taskId) } : {}),
       finding_ids: findingIds.map(Number),
       title,
       reason,
+    }),
+  suggestFindingCase: (findingIds: string[]) =>
+    post<FindingCaseSuggestion>("/exploration/finding-cases/suggest", {
+      finding_ids: findingIds.map(Number),
     }),
   updateFindingCase: (
     id: string,
     input: { version: number; title: string; report: string; severity: Severity; reason: string },
   ) => patch<FindingCase>(`/exploration/finding-cases/${encodeURIComponent(id)}`, input),
+  deleteFindingCase: (id: string) =>
+    del<{ deleted: boolean }>(`/exploration/finding-cases/${encodeURIComponent(id)}`),
   detachFindingCaseMember: (caseId: string, findingId: string, reason: string) =>
     del<{ detached: boolean }>(
       `/exploration/finding-cases/${encodeURIComponent(caseId)}/members/${encodeURIComponent(findingId)}`,

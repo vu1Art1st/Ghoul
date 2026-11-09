@@ -588,6 +588,12 @@ export interface FindingCaseDetail {
   events: FindingCaseEvent[];
 }
 
+export interface FindingCaseSuggestion {
+  title: string;
+  reason: string;
+  task_id?: string;
+}
+
 // FindingsPage 是发现列表的服务端分页响应。
 export interface FindingsPage {
   items: Finding[];
