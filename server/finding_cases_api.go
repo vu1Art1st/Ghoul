@@ -225,12 +225,17 @@ func (s *Server) getFindingCase(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	memberAssets := s.resolveFindingAssets(members)
+	memberDTOs := make([]FindingDTO, 0, len(members))
+	for _, member := range members {
+		memberDTOs = append(memberDTOs, findingFromDB(member, memberAssets))
+	}
 	events, err := s.m.pg.FindingCaseEvents(r.Context(), id)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"case": item, "members": members, "events": events})
+	writeJSON(w, 200, map[string]any{"case": item, "members": memberDTOs, "events": events})
 }
 
 func (s *Server) updateFindingCase(w http.ResponseWriter, r *http.Request) {

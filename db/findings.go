@@ -38,6 +38,11 @@ type DBFinding struct {
 	Report          string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
 	Fingerprint     string
 	EvidenceGrade   string
+	CaseID          int64
+	CaseTitle       string
+	CaseSeverity    string
+	CaseReason      string
+	CaseCount       int
 	CreatedAt       time.Time
 	TaskDescription string // populated via LEFT JOIN on tasks
 }
@@ -114,7 +119,17 @@ const findingSelectCols = `f.id, f.task_id, f.node_id, f.vulnclass, COALESCE(f.n
 	       COALESCE(f.fingerprint, ''), COALESCE(f.evidence_grade, 'unverified'),
 	       COALESCE(f.evidence_audit, '[]'::jsonb), COALESCE(f.verification, '{}'::jsonb),
 	       COALESCE(f.counter_evidence, '[]'::jsonb), COALESCE(f.pivot_hints, '[]'::jsonb),
-	       (SELECT count(*) FROM finding_traffic_bindings b WHERE b.finding_id=f.id)`
+	       (SELECT count(*) FROM finding_traffic_bindings b WHERE b.finding_id=f.id),
+	       COALESCE((SELECT m.case_id FROM finding_case_members m JOIN finding_cases c ON c.id=m.case_id
+	                 WHERE m.finding_id=f.id AND c.active),0),
+	       COALESCE((SELECT c.title FROM finding_case_members m JOIN finding_cases c ON c.id=m.case_id
+	                 WHERE m.finding_id=f.id AND c.active),''),
+	       COALESCE((SELECT c.severity FROM finding_case_members m JOIN finding_cases c ON c.id=m.case_id
+	                 WHERE m.finding_id=f.id AND c.active),''),
+	       COALESCE((SELECT c.reason FROM finding_case_members m JOIN finding_cases c ON c.id=m.case_id
+	                 WHERE m.finding_id=f.id AND c.active),''),
+	       COALESCE((SELECT count(*) FROM finding_case_members cm JOIN finding_cases c ON c.id=cm.case_id
+	                 WHERE cm.finding_id=f.id AND c.active),0)`
 
 // scanFindings materializes rows selected via findingSelectCols.
 func scanFindings(rows interface {
@@ -129,7 +144,8 @@ func scanFindings(rows interface {
 		if err := rows.Scan(&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt, &f.TaskDescription,
 			&f.EvidenceVersion, &f.ReportEvidenceVersion, &f.Fingerprint, &f.EvidenceGrade,
-			&f.EvidenceAudit, &f.Verification, &f.CounterEvidence, &f.PivotHints, &f.TrafficCount); err != nil {
+			&f.EvidenceAudit, &f.Verification, &f.CounterEvidence, &f.PivotHints, &f.TrafficCount,
+			&f.CaseID, &f.CaseTitle, &f.CaseSeverity, &f.CaseReason, &f.CaseCount); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
@@ -539,7 +555,8 @@ func (d *DB) ListFindingsForExport(f FindingFilter, ids []int64) ([]*DBFinding, 
 			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
 			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.Fingerprint,
 			&f.EvidenceGrade, &f.EvidenceAudit, &f.Verification, &f.CounterEvidence,
-			&f.PivotHints, &f.TrafficCount, &f.Report); err != nil {
+			&f.PivotHints, &f.TrafficCount, &f.CaseID, &f.CaseTitle, &f.CaseSeverity,
+			&f.CaseReason, &f.CaseCount, &f.Report); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
@@ -669,7 +686,8 @@ func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 		&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
 		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.Fingerprint,
 		&f.EvidenceGrade, &f.EvidenceAudit, &f.Verification, &f.CounterEvidence,
-		&f.PivotHints, &f.TrafficCount, &f.Report)
+		&f.PivotHints, &f.TrafficCount, &f.CaseID, &f.CaseTitle, &f.CaseSeverity,
+		&f.CaseReason, &f.CaseCount, &f.Report)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -784,9 +802,14 @@ func (d *DB) SetFindingVulnClass(id int64, vulnclass string) (int64, error) {
 type FindingMeta struct {
 	TrafficCount int
 
-	ID       int64
-	Status   string
-	AssetIDs []int64
+	ID           int64
+	Status       string
+	AssetIDs     []int64
+	CaseID       int64
+	CaseTitle    string
+	CaseSeverity string
+	CaseReason   string
+	CaseCount    int
 }
 
 // FindingMetaByNodeID maps a task's finding node ids to their standalone-row
@@ -804,8 +827,14 @@ func (d *DB) FindingMetaByNodeID(taskID int64) (map[int64]FindingMeta, error) {
 	if taskID <= 0 {
 		return out, nil
 	}
-	rows, err := d.Query(`SELECT node_id, id, COALESCE(status,'pending'), asset_ids, (SELECT count(*) FROM finding_traffic_bindings b WHERE b.finding_id=findings.id) FROM findings
-		WHERE task_id=$1 AND node_id IS NOT NULL`, taskID)
+	rows, err := d.Query(`SELECT f.node_id, f.id, COALESCE(f.status,'pending'), f.asset_ids,
+		(SELECT count(*) FROM finding_traffic_bindings b WHERE b.finding_id=f.id),
+		COALESCE(c.id,0), COALESCE(c.title,''), COALESCE(c.severity,''), COALESCE(c.reason,''),
+		COALESCE((SELECT count(*) FROM finding_case_members cm WHERE cm.case_id=c.id),0)
+		FROM findings f
+		LEFT JOIN finding_case_members m ON m.finding_id=f.id
+		LEFT JOIN finding_cases c ON c.id=m.case_id AND c.active
+		WHERE f.task_id=$1 AND f.node_id IS NOT NULL`, taskID)
 	if err != nil {
 		return out, err
 	}
@@ -814,7 +843,8 @@ func (d *DB) FindingMetaByNodeID(taskID int64) (map[int64]FindingMeta, error) {
 		var nid int64
 		var m FindingMeta
 		var aidsJSON string
-		if err := rows.Scan(&nid, &m.ID, &m.Status, &aidsJSON, &m.TrafficCount); err != nil {
+		if err := rows.Scan(&nid, &m.ID, &m.Status, &aidsJSON, &m.TrafficCount,
+			&m.CaseID, &m.CaseTitle, &m.CaseSeverity, &m.CaseReason, &m.CaseCount); err != nil {
 			return out, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &m.AssetIDs)

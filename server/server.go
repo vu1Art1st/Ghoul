@@ -238,6 +238,9 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		s.seedC2Tools()
 		seedPrompts(m.pg)          // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
 		s.seedOrchestrationTools() // P2 跨任务编排工具 seed 进 tools 表(可按 agent 绑定)
+		if err := m.pg.RecoverInterruptedFindingMergeJobs(ctx); err != nil {
+			log.Printf("[finding-merger] 恢复中断任务失败: %v", err)
+		}
 		if err := s.seedFindingRetester(); err != nil {
 			log.Printf("[retester] seed: %v", err)
 		}
@@ -797,9 +800,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/finding-cases", s.listFindingCases)
 	mux.HandleFunc("POST /api/exploration/finding-cases", s.mergeFindingCase)
 	mux.HandleFunc("POST /api/exploration/finding-cases/suggest", s.suggestFindingCase)
+	mux.HandleFunc("POST /api/exploration/finding-cases/agent-jobs", s.createFindingMergeJob)
+	mux.HandleFunc("GET /api/exploration/finding-cases/agent-jobs/{id}", s.getFindingMergeJob)
 	mux.HandleFunc("GET /api/exploration/finding-cases/{id}", s.getFindingCase)
 	mux.HandleFunc("PATCH /api/exploration/finding-cases/{id}", s.updateFindingCase)
 	mux.HandleFunc("DELETE /api/exploration/finding-cases/{id}", s.deleteFindingCase)
+	mux.HandleFunc("POST /api/exploration/finding-cases/{id}/regenerate", s.regenerateFindingCase)
 	mux.HandleFunc("DELETE /api/exploration/finding-cases/{id}/members/{findingId}", s.detachFindingCaseMember)
 	mux.HandleFunc("GET /api/exploration/intents", s.intents)
 	mux.HandleFunc("GET /api/exploration/graph", s.explorationGraph)
@@ -3956,6 +3962,27 @@ func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	findings, _ := t.Store.ListByKind(db.KindFinding, 1000) // 纯漏洞（事实是独立的 KindFact，不进报告）
+	taskNum, _ := strconv.ParseInt(t.ID, 10, 64)
+	caseViews, caseMemberIDs, caseErr := s.activeFindingCaseViews(r.Context(), taskNum)
+	if caseErr != nil {
+		writeErr(w, 500, caseErr.Error())
+		return
+	}
+	if len(caseMemberIDs) > 0 {
+		meta, err := s.m.pg.FindingMetaByNodeID(taskNum)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		filtered := findings[:0]
+		for _, finding := range findings {
+			if item, ok := meta[finding.ID]; ok && caseMemberIDs[item.ID] {
+				continue
+			}
+			filtered = append(filtered, finding)
+		}
+		findings = filtered
+	}
 	counts := map[string]int{}
 	for _, ty := range []string{"root_domain", "ip", "subdomain", "app", "service", "endpoint"} {
 		ns, _ := s.m.Assets().QueryByType(ty, 100000, 0)
@@ -3965,7 +3992,7 @@ func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
 	}
 	md := report.Markdown(report.Input{
 		Title: t.Description, Goal: t.Goal, GeneratedAt: time.Now(),
-		AssetCounts: counts, Findings: findings,
+		AssetCounts: counts, Findings: findings, Cases: caseViews,
 	})
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)

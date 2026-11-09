@@ -2,7 +2,7 @@
 
 import * as React from "react";
 
-import { CheckIcon, CopyIcon, DownloadIcon, FileTextIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, DownloadIcon, FileTextIcon, RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Markdown } from "@/components/markdown";
@@ -15,6 +15,7 @@ export function ReportTab({ taskId }: { taskId: string }) {
   const [report, setReport] = React.useState<string>("");
   const [loading, setLoading] = React.useState(true);
   const [copied, setCopied] = React.useState(false);
+  const [reload, setReload] = React.useState(0);
 
   React.useEffect(() => {
     let active = true;
@@ -33,7 +34,7 @@ export function ReportTab({ taskId }: { taskId: string }) {
     return () => {
       active = false;
     };
-  }, [taskId]);
+  }, [taskId, reload]);
 
   async function copy() {
     if (!report) return;
@@ -85,6 +86,10 @@ export function ReportTab({ taskId }: { taskId: string }) {
           <FileTextIcon className="size-4" /> 渗透测试报告（Markdown）
         </CardTitle>
         <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setReload((value) => value + 1)} disabled={loading}>
+            <RefreshCwIcon className={loading ? "animate-spin" : ""} />
+            刷新
+          </Button>
           <Button size="sm" variant="outline" onClick={() => void exportDocx()}>
             <DownloadIcon /> DOCX
           </Button>

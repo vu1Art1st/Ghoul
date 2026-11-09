@@ -19,6 +19,12 @@ type Input struct {
 	GeneratedAt time.Time
 	AssetCounts map[string]int
 	Findings    []*db.Node
+	Cases       []CaseView
+}
+
+type CaseView struct {
+	Case    db.FindingCase
+	Members []*db.DBFinding
 }
 
 type findingView struct {
@@ -54,7 +60,7 @@ func Markdown(in Input) string {
 
 	// summary
 	fmt.Fprintf(&b, "## 摘要\n\n")
-	fmt.Fprintf(&b, "- 确认发现：**%d** 个\n", len(in.Findings))
+	fmt.Fprintf(&b, "- 确认发现：**%d** 个\n", len(in.Findings)+len(in.Cases))
 	fmt.Fprintf(&b, "- 资产：")
 	var types []string
 	for t := range in.AssetCounts {
@@ -71,20 +77,45 @@ func Markdown(in Input) string {
 
 	// findings
 	fmt.Fprintf(&b, "## 发现\n\n")
-	if len(in.Findings) == 0 {
+	if len(in.Findings) == 0 && len(in.Cases) == 0 {
 		b.WriteString("_本次未确认漏洞。_\n\n")
 	} else {
+		index := 1
+		cases := append([]CaseView(nil), in.Cases...)
+		sort.SliceStable(cases, func(i, j int) bool {
+			return sevRank[strings.ToLower(cases[i].Case.Severity)] < sevRank[strings.ToLower(cases[j].Case.Severity)]
+		})
+		for _, item := range cases {
+			fmt.Fprintf(&b, "### %d. [%s] %s\n\n", index, strings.ToUpper(nz(item.Case.Severity, "info")), nz(item.Case.Title, "未命名漏洞组"))
+			if item.Case.Reason != "" {
+				fmt.Fprintf(&b, "**归并理由：** %s\n\n", item.Case.Reason)
+			}
+			if item.Case.SeverityReason != "" {
+				fmt.Fprintf(&b, "**评级依据：** %s\n\n", item.Case.SeverityReason)
+			}
+			if len(item.Members) > 0 {
+				ids := make([]string, 0, len(item.Members))
+				for _, member := range item.Members {
+					ids = append(ids, fmt.Sprintf("#%d", member.ID))
+				}
+				fmt.Fprintf(&b, "_合并 Finding：%s_\n\n", strings.Join(ids, "、"))
+			}
+			b.WriteString(item.Case.Report)
+			b.WriteString("\n\n")
+			index++
+		}
 		fs := make([]findingView, 0, len(in.Findings))
 		for _, n := range in.Findings {
 			fs = append(fs, parseFinding(n))
 		}
 		sort.SliceStable(fs, func(i, j int) bool { return sevRank[fs[i].Severity] < sevRank[fs[j].Severity] })
-		for i, f := range fs {
-			fmt.Fprintf(&b, "### %d. [%s] %s\n\n", i+1, strings.ToUpper(nz(f.Severity, "info")), nz(f.Name, nz(f.VulnClass, "未分类")))
+		for _, f := range fs {
+			fmt.Fprintf(&b, "### %d. [%s] %s\n\n", index, strings.ToUpper(nz(f.Severity, "info")), nz(f.Name, nz(f.VulnClass, "未分类")))
 			fmt.Fprintf(&b, "%s\n\n", nz(f.Summary, ""))
 			if f.PoC != "" {
 				fmt.Fprintf(&b, "**PoC / 证据：**\n\n```\n%s\n```\n\n", f.PoC)
 			}
+			index++
 		}
 	}
 

@@ -173,6 +173,22 @@ func (s *Server) exportTaskDocx(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	taskNum, _ := strconv.ParseInt(task.ID, 10, 64)
+	caseViews, caseMemberIDs, err := s.activeFindingCaseViews(r.Context(), taskNum)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if len(caseMemberIDs) > 0 {
+		filtered := findings[:0]
+		for _, finding := range findings {
+			if !caseMemberIDs[finding.ID] {
+				filtered = append(filtered, finding)
+			}
+		}
+		findings = filtered
+	}
+	findings = append(findings, findingCaseViewsAsDBFindings(caseViews)...)
 	s.attachEvidenceArtifacts(findings)
 	counts := map[string]int{}
 	appendix := map[string][]string{}

@@ -1261,6 +1261,25 @@ CREATE TABLE IF NOT EXISTS finding_case_suggestions (
     UNIQUE(left_id,right_id),
     CHECK(left_id < right_id)
 );
+CREATE TABLE IF NOT EXISTS finding_merge_jobs (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    finding_ids JSONB NOT NULL,
+    case_id BIGINT REFERENCES finding_cases(id) ON DELETE SET NULL,
+    case_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ungrouped_finding_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    group_count INTEGER NOT NULL DEFAULT 0,
+    mode TEXT NOT NULL DEFAULT 'cluster',
+    status TEXT NOT NULL DEFAULT 'queued',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS case_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS ungrouped_finding_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS group_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'cluster';
+CREATE INDEX IF NOT EXISTS idx_finding_merge_jobs_task ON finding_merge_jobs(task_id, id DESC);
 CREATE TABLE IF NOT EXISTS finding_case_blocks (
     left_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
     right_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,

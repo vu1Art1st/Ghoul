@@ -5,24 +5,30 @@ import {
   ArrowLeft,
   GitMerge,
   Loader2,
-  Plus,
   RefreshCw,
   Save,
   Sparkles,
   Trash2,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
-import type { Finding, FindingCase, FindingCaseDetail, FindingTaskOption, Severity } from "@/lib/types";
+import type {
+  Finding,
+  FindingCase,
+  FindingCaseDetail,
+  FindingMergeJob,
+  FindingTaskOption,
+  Severity,
+} from "@/lib/types";
 import Link from "next/link";
 
 function findingLabel(finding: Finding): string {
@@ -43,14 +49,11 @@ export default function FindingCasesPage() {
   const [taskOptions, setTaskOptions] = React.useState<FindingTaskOption[]>([]);
   const [cases, setCases] = React.useState<FindingCase[]>([]);
   const [selected, setSelected] = React.useState<FindingCaseDetail | null>(null);
+  const [taskFindings, setTaskFindings] = React.useState<Finding[]>([]);
   const [loading, setLoading] = React.useState(false);
+  const [findingsLoading, setFindingsLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
-  const [resolving, setResolving] = React.useState(false);
-  const [suggesting, setSuggesting] = React.useState(false);
-  const [findingInput, setFindingInput] = React.useState("");
   const [selectedFindings, setSelectedFindings] = React.useState<Finding[]>([]);
-  const [title, setTitle] = React.useState("");
-  const [reason, setReason] = React.useState("");
   const [report, setReport] = React.useState("");
   const [severity, setSeverity] = React.useState<Severity>("high");
   const [severityReason, setSeverityReason] = React.useState("");
@@ -59,6 +62,10 @@ export default function FindingCasesPage() {
     () => selectedFindings.map(findingKey).filter(Boolean),
     [selectedFindings],
   );
+  const selectableFindings = React.useMemo(() => taskFindings.filter((finding) => !finding.case_id), [taskFindings]);
+  const allSelectableSelected =
+    selectableFindings.length > 0 &&
+    selectableFindings.every((finding) => selectedFindingIds.includes(findingKey(finding)));
 
   async function loadCases() {
     setLoading(true);
@@ -75,9 +82,36 @@ export default function FindingCasesPage() {
   async function loadTaskOptions() {
     try {
       const stats = await api.findingStats();
-      setTaskOptions(stats.tasks ?? []);
+      const options = stats.tasks ?? [];
+      setTaskOptions(options);
+      if (!taskId && options.length > 0) setTaskId(String(options[0].id));
     } catch (error) {
       toast.error(`加载任务列表失败: ${error}`);
+    }
+  }
+
+  async function loadTaskFindings() {
+    if (!taskId) {
+      setTaskFindings([]);
+      setSelectedFindings([]);
+      return;
+    }
+    setFindingsLoading(true);
+    try {
+      const result = await api.findingsPage({
+        page: 1,
+        pageSize: 200,
+        task: taskId,
+        sort: "severity",
+      });
+      setTaskFindings(result.items);
+      setSelectedFindings((current) =>
+        current.filter((item) => result.items.some((next) => findingKey(next) === findingKey(item))),
+      );
+    } catch (error) {
+      toast.error(`加载 Finding 清单失败: ${error}`);
+    } finally {
+      setFindingsLoading(false);
     }
   }
 
@@ -87,6 +121,7 @@ export default function FindingCasesPage() {
 
   React.useEffect(() => {
     void loadCases();
+    void loadTaskFindings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
@@ -102,87 +137,75 @@ export default function FindingCasesPage() {
     }
   }
 
-  async function addFindings() {
-    const parts = findingInput
-      .split(/[\s,，;；]+/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-    if (parts.length === 0) return;
-    if (parts.some((value) => !/^\d+$/.test(value) || Number(value) <= 0)) {
-      toast.error("Finding ID 必须是正整数");
-      return;
-    }
-    const existing = new Set(selectedFindings.map(findingKey));
-    const ids = Array.from(new Set(parts)).filter((id) => !existing.has(id));
-    if (ids.length === 0) {
-      setFindingInput("");
-      return;
-    }
-
-    setResolving(true);
-    try {
-      const loaded = await Promise.all(ids.map((id) => api.getFinding(id)));
-      const next = [...selectedFindings, ...loaded];
-      const taskIds = new Set(next.map((finding) => finding.task_id).filter(Boolean).map(String));
-      if (taskIds.size !== 1 || next.some((finding) => !finding.task_id)) {
-        toast.error("只能归并同一任务下的漏洞");
-        return;
+  function toggleFinding(finding: Finding, checked: boolean) {
+    setSelectedFindings((current) => {
+      const key = findingKey(finding);
+      if (checked) {
+        return current.some((item) => findingKey(item) === key) ? current : [...current, finding];
       }
-      setSelectedFindings(next);
-      setFindingInput("");
-      toast.success(`已获取 ${loaded.length} 条漏洞`);
-    } catch (error) {
-      toast.error(`获取漏洞失败: ${error}`);
-    } finally {
-      setResolving(false);
+      return current.filter((item) => findingKey(item) !== key);
+    });
+  }
+
+  function toggleAllFindings(checked: boolean) {
+    setSelectedFindings(checked ? taskFindings.filter((finding) => !finding.case_id) : []);
+  }
+
+  async function waitForMergeJob(jobId: string): Promise<FindingMergeJob> {
+    for (let attempt = 0; attempt < 600; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      const job = await api.findingMergeJob(jobId);
+      if (job.status === "succeeded") return job;
+      if (job.status === "failed") throw new Error(job.error || "漏洞归并 Agent 执行失败");
     }
+    throw new Error("漏洞归并 Agent 超时");
   }
 
-  function removeFinding(finding: Finding) {
-    const key = findingKey(finding);
-    setSelectedFindings((current) => current.filter((item) => findingKey(item) !== key));
-  }
-
-  async function suggestCase() {
+  async function runAgentMerge() {
     if (selectedFindingIds.length < 2) {
       toast.error("至少选择两条 Finding");
       return;
     }
-    setSuggesting(true);
+    setSaving(true);
     try {
-      const suggestion = await api.suggestFindingCase(selectedFindingIds);
-      setTitle(suggestion.title);
-      setReason(suggestion.reason);
-      toast.success("AI 已生成统一名称和归并理由");
+      const job = await api.createFindingMergeJob(selectedFindingIds);
+      const finished = await waitForMergeJob(job.id);
+      if (finished.case_ids.length === 0) throw new Error("Agent 任务完成但未返回漏洞组");
+      toast.success(
+        `AI 已生成 ${finished.case_ids.length} 个漏洞组，保留 ${finished.ungrouped_finding_ids.length} 条未归并 Finding`,
+      );
+      setSelectedFindings([]);
+      await Promise.all([loadCases(), loadTaskFindings()]);
+      if (finished.case_ids.length === 1) {
+        const item = await api.findingCase(String(finished.case_ids[0]));
+        await openCase(item.case);
+      } else {
+        setSelected(null);
+      }
     } catch (error) {
-      toast.error(`AI 生成失败: ${error}`);
+      toast.error(`AI 归并失败: ${error}`);
     } finally {
-      setSuggesting(false);
+      setSaving(false);
     }
   }
 
-  async function mergeFindings() {
-    if (selectedFindingIds.length < 2 || !title.trim() || !reason.trim()) {
-      toast.error("请选择至少两个 Finding，并填写统一名称和归并理由");
-      return;
-    }
+  async function regenerateCase() {
+    if (!selected) return;
     setSaving(true);
     try {
-      const item = await api.mergeFindingCases(
-        undefined,
-        selectedFindingIds,
-        title.trim(),
-        reason.trim(),
-      );
-      toast.success(`已归并到漏洞组 #${item.id}`);
-      setSelectedFindings([]);
-      setFindingInput("");
-      setTitle("");
-      setReason("");
-      await loadCases();
-      await openCase(item);
+      const job = await api.regenerateFindingCase(selected.case.id);
+      const finished = await waitForMergeJob(job.id);
+      const caseID = finished.case_ids[0] ? String(finished.case_ids[0]) : finished.case_id;
+      if (!caseID) throw new Error("Agent 任务完成但未返回漏洞组");
+      toast.success("AI 已重新生成定级和统一报告");
+      await Promise.all([loadCases(), loadTaskFindings()]);
+      const detail = await api.findingCase(caseID);
+      setSelected(detail);
+      setReport(detail.case.report ?? "");
+      setSeverity((detail.case.severity || "high") as Severity);
+      setSeverityReason(detail.case.severity_reason || "");
     } catch (error) {
-      toast.error(`归并失败: ${error}`);
+      toast.error(`重新生成失败: ${error}`);
     } finally {
       setSaving(false);
     }
@@ -276,7 +299,11 @@ export default function FindingCasesPage() {
               </SelectContent>
             </Select>
           </div>
-          <Button variant="outline" onClick={() => void loadCases()} disabled={loading}>
+          <Button
+            variant="outline"
+            onClick={() => void Promise.all([loadCases(), loadTaskFindings()])}
+            disabled={loading || findingsLoading}
+          >
             {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             刷新
           </Button>
@@ -287,94 +314,70 @@ export default function FindingCasesPage() {
         <div className="flex flex-col gap-4">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">新建归并</CardTitle>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-sm">选择 Finding</CardTitle>
+                <Badge variant="outline">{selectedFindingIds.length} 已选</Badge>
+              </div>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="merge-ids">Finding ID</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="merge-ids"
-                    value={findingInput}
-                    onChange={(event) => setFindingInput(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        void addFindings();
-                      }
-                    }}
-                    placeholder="105, 108"
+              <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Checkbox
+                    checked={allSelectableSelected}
+                    onCheckedChange={(checked) => toggleAllFindings(checked === true)}
+                    disabled={selectableFindings.length === 0 || findingsLoading}
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => void addFindings()}
-                    disabled={resolving || !findingInput.trim()}
-                  >
-                    {resolving ? <Loader2 className="animate-spin" /> : <Plus />}
-                    添加
-                  </Button>
-                </div>
+                  全选可归并 Finding
+                </label>
+                {findingsLoading ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null}
               </div>
-
-              {selectedFindings.length > 0 ? (
-                <div className="divide-y rounded-md border">
-                  {selectedFindings.map((finding) => (
-                    <div key={findingKey(finding)} className="flex items-center gap-2 px-3 py-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">{findingLabel(finding)}</div>
-                        <div className="text-muted-foreground truncate text-xs">
-                          #{findingKey(finding)} · {finding.severity} · {finding.vulnclass}
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`移除 Finding #${findingKey(finding)}`}
-                        title="移除"
-                        onClick={() => removeFinding(finding)}
-                      >
-                        <X />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <Label htmlFor="merge-title">统一名称</Label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void suggestCase()}
-                    disabled={suggesting || selectedFindingIds.length < 2}
-                  >
-                    {suggesting ? <Loader2 className="animate-spin" /> : <Sparkles />}
-                    AI 生成
-                  </Button>
-                </div>
-                <Input id="merge-title" value={title} onChange={(event) => setTitle(event.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="merge-reason">归并理由</Label>
-                <Textarea
-                  id="merge-reason"
-                  rows={3}
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                  placeholder="说明这些记录为何是同一根因"
-                />
+              <div className="max-h-[360px] divide-y overflow-y-auto rounded-md border">
+                {taskFindings.map((finding) => {
+                  const key = findingKey(finding);
+                  const grouped = Boolean(finding.case_id);
+                  return (
+                    <label
+                      key={key}
+                      className={`flex items-start gap-3 px-3 py-2.5 ${
+                        grouped ? "cursor-not-allowed bg-muted/40" : "cursor-pointer hover:bg-muted/50"
+                      }`}
+                    >
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={selectedFindingIds.includes(key)}
+                        disabled={grouped}
+                        onCheckedChange={(checked) => toggleFinding(finding, checked === true)}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2">
+                          <span className="truncate text-sm font-medium">{findingLabel(finding)}</span>
+                          <Badge variant="outline" className="shrink-0">
+                            {finding.severity}
+                          </Badge>
+                        </span>
+                        <span className="text-muted-foreground mt-0.5 block truncate text-xs">
+                          #{key} · {finding.vulnclass} · {finding.status}
+                        </span>
+                        {grouped ? (
+                          <span className="mt-1 block truncate text-xs text-primary">
+                            已归并：{finding.case_title || `漏洞组 #${finding.case_id}`}
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                  );
+                })}
+                {!findingsLoading && taskFindings.length === 0 ? (
+                  <div className="text-muted-foreground px-3 py-8 text-center text-sm">当前任务暂无 Finding</div>
+                ) : null}
               </div>
               <Button
                 className="w-full"
-                onClick={() => void mergeFindings()}
+                onClick={() => void runAgentMerge()}
                 disabled={saving || selectedFindingIds.length < 2}
               >
-                {saving ? <Loader2 className="animate-spin" /> : <GitMerge />}
-                归并
+                {saving ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                AI 自动分组并生成报告
               </Button>
             </CardContent>
           </Card>
@@ -412,10 +415,16 @@ export default function FindingCasesPage() {
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="min-w-0 truncate text-sm">{selected ? selected.case.title : "选择漏洞组"}</CardTitle>
               {selected ? (
-                <Button variant="destructive" size="sm" onClick={() => void deleteCase()} disabled={saving}>
-                  <Trash2 />
-                  删除漏洞组
-                </Button>
+                <div className="flex shrink-0 gap-2">
+                  <Button variant="outline" size="sm" onClick={() => void regenerateCase()} disabled={saving}>
+                    {saving ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                    AI 重新生成
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={() => void deleteCase()} disabled={saving}>
+                    <Trash2 />
+                    删除漏洞组
+                  </Button>
+                </div>
               ) : null}
             </div>
           </CardHeader>
@@ -427,6 +436,9 @@ export default function FindingCasesPage() {
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <Badge variant="outline">v{selected.case.version}</Badge>
                   <Badge variant="outline">报告 v{selected.case.report_version}</Badge>
+                  {!selected.case.report || !selected.case.severity || !selected.case.severity_reason ? (
+                    <Badge variant="secondary">报告待生成</Badge>
+                  ) : null}
                   <span className="text-muted-foreground">{selected.case.reason}</span>
                 </div>
                 <div className="space-y-2">

@@ -114,3 +114,219 @@ func TestDeleteFindingCaseKeepsFindings(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveFindingCaseAnalysisPersistsDeliveryFieldsAtomically(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+
+	task, err := d.CreateTask("finding case analysis", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	var ids []int64
+	for i := 0; i < 2; i++ {
+		id, addErr := d.AddFinding(task.ID, 0, "MCP 网关无鉴权", fmt.Sprintf("finding %d", i), SeverityHigh,
+			"同一 MCP 网关缺少鉴权", "同一匿名 tools/call 证据", "test", nil)
+		if addErr != nil {
+			t.Fatalf("AddFinding[%d]: %v", i, addErr)
+		}
+		ids = append(ids, id)
+		defer d.DeleteFinding(id)
+	}
+
+	ctx := context.Background()
+	caseID, err := d.SaveFindingCaseAnalysis(ctx, 0, ids,
+		"MCP 网关无鉴权", "两条 Finding 均来自同一匿名 tools/call 入口",
+		SeverityCritical, "无需认证即可调用工具，影响全部租户",
+		"## 概述\n\nMCP 网关未校验 Authorization。", "finding_merger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteFindingCase(ctx, caseID)
+	item, err := d.GetFindingCase(ctx, caseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.TaskID == nil || *item.TaskID != task.ID || item.Count != 2 ||
+		item.Severity != SeverityCritical || item.SeverityReason == "" || item.Report == "" ||
+		item.ReportVersion != 1 {
+		t.Fatalf("analysis was not persisted atomically: %+v", item)
+	}
+	if err := d.UpdateFindingCaseReport(ctx, caseID, item.Version, item.Title,
+		"## 概述\n\n更新后的统一报告。", item.Severity, item.SeverityReason); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := d.GetFindingCase(ctx, caseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Version != item.Version+1 || updated.ReportVersion != item.ReportVersion+1 {
+		t.Fatalf("report update versions were not incremented: before=%+v after=%+v", item, updated)
+	}
+}
+
+func TestFindingMergeJobLifecycle(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+
+	task, err := d.CreateTask("finding merge job", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	var ids []int64
+	for i := 0; i < 2; i++ {
+		id, addErr := d.AddFinding(task.ID, 0, "job", fmt.Sprintf("finding %d", i), SeverityHigh,
+			"summary", "evidence", "test", nil)
+		if addErr != nil {
+			t.Fatal(addErr)
+		}
+		ids = append(ids, id)
+		defer d.DeleteFinding(id)
+	}
+	jobID, err := d.CreateFindingMergeJob(context.Background(), ids, "cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Exec(`DELETE FROM finding_merge_jobs WHERE id=$1`, jobID)
+	if err := d.SetFindingMergeJobStatus(context.Background(), jobID, "clustering"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.FinishFindingMergeJob(context.Background(), jobID, nil, nil, "failed", "test failure"); err != nil {
+		t.Fatal(err)
+	}
+	job, err := d.GetFindingMergeJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job == nil || job.Status != "failed" || job.Error != "test failure" ||
+		job.TaskID == nil || *job.TaskID != task.ID || job.Mode != "cluster" {
+		t.Fatalf("job lifecycle mismatch: %+v", job)
+	}
+}
+
+func TestSaveFindingCaseAnalysesCreatesMultipleGroups(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+
+	task, err := d.CreateTask("multi finding case analysis", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	var ids []int64
+	for i := 0; i < 6; i++ {
+		id, addErr := d.AddFinding(task.ID, 0, fmt.Sprintf("class-%d", i/2),
+			fmt.Sprintf("finding %d", i), SeverityHigh, "summary", "evidence", "test", nil)
+		if addErr != nil {
+			t.Fatal(addErr)
+		}
+		ids = append(ids, id)
+		defer d.DeleteFinding(id)
+	}
+	analyses := []FindingCaseAnalysis{
+		{FindingIDs: ids[:2], Title: "MCP 网关无鉴权", Reason: "同一网关", Severity: SeverityCritical,
+			SeverityReason: "无需认证", Report: "## MCP\n\n统一报告"},
+		{FindingIDs: ids[2:4], Title: "订单查询 SQL 注入", Reason: "同一参数", Severity: SeverityHigh,
+			SeverityReason: "可读取数据", Report: "## SQLi\n\n统一报告"},
+		{FindingIDs: ids[4:], Title: "订单越权读取", Reason: "同一对象授权缺失", Severity: SeverityHigh,
+			SeverityReason: "可越权读取", Report: "## IDOR\n\n统一报告"},
+	}
+	caseIDs, err := d.SaveFindingCaseAnalyses(context.Background(), task.ID, analyses, nil, "finding_merger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caseIDs) != 3 {
+		t.Fatalf("case ids=%v, want 3", caseIDs)
+	}
+	for i, caseID := range caseIDs {
+		defer d.DeleteFindingCase(context.Background(), caseID)
+		item, getErr := d.GetFindingCase(context.Background(), caseID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if item.Count != 2 || item.Title != analyses[i].Title || item.Report != analyses[i].Report {
+			t.Fatalf("case %d mismatch: %+v", i, item)
+		}
+	}
+	jobID, err := d.CreateFindingMergeJob(context.Background(), ids, "cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Exec(`DELETE FROM finding_merge_jobs WHERE id=$1`, jobID)
+	if err := d.SetFindingMergeJobStatus(context.Background(), jobID, "saving"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.FinishFindingMergeJob(context.Background(), jobID, caseIDs, nil, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	job, err := d.GetFindingMergeJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job == nil || job.Status != "succeeded" || job.GroupCount != 3 ||
+		fmt.Sprint(job.CaseIDs) != fmt.Sprint(caseIDs) || len(job.UngroupedFindingIDs) != 0 {
+		t.Fatalf("multi-group job result mismatch: %+v", job)
+	}
+}
+
+func TestFindingMetaIncludesActiveCase(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+
+	task, err := d.CreateTask("finding meta case", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	store := d.Exploration(task.ExplorationID)
+	var ids []int64
+	var nodeIDs []int64
+	for i := 0; i < 2; i++ {
+		nodeID, nodeErr := store.AddNode(KindFinding, map[string]any{
+			"vulnclass": "MCP", "severity": SeverityHigh, "summary": fmt.Sprintf("finding %d", i),
+		}, 5, "confirmed", "worker", nil)
+		if nodeErr != nil {
+			t.Fatal(nodeErr)
+		}
+		id, addErr := d.AddFinding(task.ID, nodeID, "MCP", fmt.Sprintf("finding %d", i), SeverityHigh,
+			"summary", "evidence", "test", nil)
+		if addErr != nil {
+			t.Fatal(addErr)
+		}
+		ids = append(ids, id)
+		nodeIDs = append(nodeIDs, nodeID)
+		defer d.DeleteFinding(id)
+	}
+	ctx := context.Background()
+	caseID, err := d.SaveFindingCaseAnalysis(ctx, task.ID, ids, "MCP 网关无鉴权",
+		"同一匿名入口", SeverityCritical, "无需认证", "## 报告", "finding_merger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteFindingCase(ctx, caseID)
+	meta, err := d.FindingMetaByNodeID(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, nodeID := range nodeIDs {
+		item := meta[nodeID]
+		if item.CaseID != caseID || item.CaseTitle != "MCP 网关无鉴权" ||
+			item.CaseSeverity != SeverityCritical || item.CaseCount != 2 {
+			t.Fatalf("node %d case metadata mismatch: %+v", nodeID, item)
+		}
+	}
+}

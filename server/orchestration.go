@@ -511,6 +511,8 @@ func (s *Server) seedOrchestrationTools() {
 	s.reseedPlannerPrompt()           // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
 	s.reseedWorkerPrompt()            // worker 提示词:加否定结论证据门槛(一次性)
 	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
+	s.seedFindingMergerAgent()        // 预置「漏洞归并」agent(一次性)
+	s.upgradeFindingMergerPrompt()    // 旧单组提示词升级为多组聚类提示词(一次性)
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
 	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
@@ -788,6 +790,55 @@ func (s *Server) seedReporterAgent() {
 		log.Printf("[reporter] 创建触发器失败: %v", err)
 	}
 	log.Printf("[reporter] 已预置「报告撰写」agent + finding 触发器")
+}
+
+// seedFindingMergerAgent creates the editable delivery-merge agent. The Agent is
+// invoked by the dedicated merge-job endpoint, not by an automatic report_finding
+// trigger, so human selection stays the source of truth.
+func (s *Server) seedFindingMergerAgent() {
+	const flag = "finding_merger_agent_seed_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	defer func() { _ = s.m.pg.SetSetting(flag, "true") }()
+	if exist, _ := s.m.pg.GetAgentByKey(agent.FindingMergerAgentKey); exist != nil {
+		return
+	}
+	a, err := s.m.pg.CreateAgent(agent.FindingMergerAgentKey, "漏洞归并",
+		"判断多条 Finding 是否属于同一根因，生成统一名称、定级依据和交付报告。")
+	if err != nil {
+		log.Printf("[finding-merger] 创建 agent 失败: %v", err)
+		return
+	}
+	if err := s.m.pg.SeedPromptIfEmpty(a.ID, agent.FindingMergerDefaultPrompt); err != nil {
+		log.Printf("[finding-merger] seed prompt 失败: %v", err)
+		return
+	}
+	log.Printf("[finding-merger] 已预置「漏洞归并」agent")
+}
+
+func (s *Server) upgradeFindingMergerPrompt() {
+	const flag = "finding_merger_multi_group_prompt_v2"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	defer func() { _ = s.m.pg.SetSetting(flag, "true") }()
+	a, err := s.m.pg.GetAgentByKey(agent.FindingMergerAgentKey)
+	if err != nil || a == nil {
+		return
+	}
+	current, err := s.m.pg.CurrentPrompt(a.ID)
+	if err != nil || strings.TrimSpace(current) == "" {
+		return
+	}
+	if strings.Contains(current, "只输出一个 JSON 对象") &&
+		strings.Contains(current, "统一漏洞条目") {
+		if _, err := s.m.pg.ResetPromptToDefault(a.ID, agent.FindingMergerDefaultPrompt); err != nil {
+			log.Printf("[finding-merger] 提示词升级失败: %v", err)
+			return
+		}
+		log.Printf("[finding-merger] 提示词已升级为多组自动聚类")
+	}
 }
 
 // seedAutoReportFindingBinding adds "auto" to report_finding's binding ONCE so

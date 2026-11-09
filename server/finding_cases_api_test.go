@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -54,7 +53,37 @@ func TestFindingCaseRoutesRegister(t *testing.T) {
 	}
 }
 
-func TestFindingCaseAPIIntegrationTask4Findings105And108(t *testing.T) {
+func TestParseFindingMergeAgentResult(t *testing.T) {
+	got, err := parseFindingMergeAgentResult("```json\n" + `{"title":"MCP 网关无鉴权","reason":"同一匿名入口","severity":"critical","severity_reason":"无需认证即可调用工具","report":"## 概述\n\n证据一致。"}` + "\n```")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "MCP 网关无鉴权" || got.Severity != db.SeverityCritical || got.Report == "" {
+		t.Fatalf("unexpected merge result: %+v", got)
+	}
+	if _, err := parseFindingMergeAgentResult(`{"title":"x","reason":"x","severity":"urgent","severity_reason":"x","report":"x"}`); err == nil {
+		t.Fatal("invalid severity should be rejected")
+	}
+}
+
+func TestValidateFindingMergeClusterPlan(t *testing.T) {
+	plan := findingMergeClusterPlan{
+		Groups: []findingMergeCluster{
+			{FindingIDs: []int64{105, 106}, RootCauseKey: "mcp", Reason: "same gateway"},
+			{FindingIDs: []int64{107, 108}, RootCauseKey: "sqli", Reason: "same parameter"},
+		},
+		UngroupedFindingIDs: []int64{109},
+	}
+	if err := validateFindingMergeClusterPlan([]int64{105, 106, 107, 108, 109}, plan); err != nil {
+		t.Fatal(err)
+	}
+	plan.Groups[1].FindingIDs = []int64{106, 108}
+	if err := validateFindingMergeClusterPlan([]int64{105, 106, 107, 108, 109}, plan); err == nil {
+		t.Fatal("duplicate finding should be rejected")
+	}
+}
+
+func TestFindingCaseAPIIntegrationTask4AutoClustersMultipleGroups(t *testing.T) {
 	if os.Getenv("GHOUL_FINDING_CASE_IT") != "1" {
 		t.Skip("set GHOUL_FINDING_CASE_IT=1 against a dedicated database")
 	}
@@ -64,12 +93,12 @@ func TestFindingCaseAPIIntegrationTask4Findings105And108(t *testing.T) {
 	}
 	defer m.Close()
 
-	// This test is intentionally guarded and expected to run against a fresh
-	// database. Shape the rows exactly like the reported task4 / 105 / 108 case.
+	// Guarded test for a fresh database. Task4 has three root causes across
+	// findings 105-110 and must produce three independent cases.
 	if _, err := m.pg.Exec(`SELECT setval(pg_get_serial_sequence('tasks','id'), 3, true)`); err != nil {
 		t.Fatal(err)
 	}
-	task, err := m.CreateTask("task4 finding case integration", "verify merge", nil, 0, 0)
+	task, err := m.CreateTask("task4 finding case integration", "verify multi-group merge", nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,27 +111,29 @@ func TestFindingCaseAPIIntegrationTask4Findings105And108(t *testing.T) {
 	if _, err := m.pg.Exec(`SELECT setval(pg_get_serial_sequence('findings','id'), 104, true)`); err != nil {
 		t.Fatal(err)
 	}
-	finding105, err := m.pg.AddFinding(taskID, 0, "SQL 注入", "订单查询 SQL 注入", db.SeverityHigh,
-		"order_id 参数可注入", "sqlmap 确认 order_id 可布尔盲注", "test", nil)
-	if err != nil {
-		t.Fatal(err)
+	seeds := []struct {
+		class, name, summary, evidence string
+	}{
+		{"MCP 网关无鉴权", "MCP initialize 无鉴权", "匿名 initialize 返回 200", "获得 mcp-session-id"},
+		{"MCP 网关无鉴权", "MCP tools/call 无鉴权", "匿名 tools/call 可执行", "工具调用返回真实结果"},
+		{"SQL 注入", "订单查询 SQL 注入", "order_id 参数可注入", "布尔盲注确认"},
+		{"SQL 注入", "订单导出 SQL 注入", "同一 order_id 参数可注入", "导出接口同样可盲注"},
+		{"IDOR", "订单详情越权读取", "order_id 可越权读取他人订单", "返回其他用户地址"},
+		{"IDOR", "订单附件越权下载", "同一对象级授权缺失", "可下载其他用户附件"},
 	}
-	if finding105 != 105 {
-		t.Fatalf("first finding id=%d, want 105", finding105)
+	findingIDs := make([]int64, 0, len(seeds))
+	for i, seed := range seeds {
+		id, addErr := m.pg.AddFinding(taskID, 0, seed.class, seed.name, db.SeverityHigh,
+			seed.summary, seed.evidence, "test", nil)
+		if addErr != nil {
+			t.Fatalf("AddFinding[%d]: %v", i, addErr)
+		}
+		if want := int64(105 + i); id != want {
+			t.Fatalf("finding id=%d, want %d", id, want)
+		}
+		findingIDs = append(findingIDs, id)
+		defer m.pg.DeleteFinding(id)
 	}
-	if _, err := m.pg.Exec(`SELECT setval(pg_get_serial_sequence('findings','id'), 107, true)`); err != nil {
-		t.Fatal(err)
-	}
-	finding108, err := m.pg.AddFinding(taskID, 0, "订单接口 SQL 注入", "订单查询 SQL 注入", db.SeverityHigh,
-		"order_id 参数可注入", "同一参数与响应差异确认可布尔盲注", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finding108 != 108 {
-		t.Fatalf("second finding id=%d, want 108", finding108)
-	}
-	defer m.pg.DeleteFinding(finding105)
-	defer m.pg.DeleteFinding(finding108)
 
 	profileID, err := m.pg.SaveProfile(&db.LLMProfile{
 		Name: "finding-case-suggestion-test", Format: "openai", Model: "test-model", APIKey: "sk-test",
@@ -114,57 +145,65 @@ func TestFindingCaseAPIIntegrationTask4Findings105And108(t *testing.T) {
 	if _, err := m.ReplaceTaskLLMProfiles(task.ID, []int64{profileID}, profileID); err != nil {
 		t.Fatal(err)
 	}
+	reportTitles := []string{"MCP 网关无鉴权", "订单查询 SQL 注入", "订单越权读取"}
+	reportCall := 0
 	s := &Server{
 		m: m,
 		provByProfile: map[int64]*provEntry{profileID: {
-			prov: retestProvider{complete: func(context.Context, llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+			prov: retestProvider{complete: func(_ context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+				if strings.Contains(strings.Join(req.System, "\n"), "当前是聚类阶段") {
+					return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+						llm.TextBlock(`{"groups":[{"finding_ids":[105,106],"root_cause_key":"mcp-missing-auth","reason":"同一 MCP 网关缺少鉴权"},{"finding_ids":[107,108],"root_cause_key":"order-id-sqli","reason":"同一 order_id 参数存在 SQL 注入"},{"finding_ids":[109,110],"root_cause_key":"order-id-idor","reason":"同一订单对象授权缺失"}],"ungrouped_finding_ids":[]}`),
+					}}, "end_turn", llm.Usage{}, nil
+				}
+				title := reportTitles[reportCall%len(reportTitles)]
+				reportCall++
+				body, _ := json.Marshal(map[string]any{
+					"title": title, "reason": "同一根因", "severity": "high",
+					"severity_reason": "无需高权限即可利用，影响业务数据机密性",
+					"report":          "## 概述\n\n" + title + "统一报告。",
+				})
 				return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
-					llm.TextBlock(`{"title":"订单查询 SQL 注入","reason":"两条记录使用同一 order_id 参数并命中相同 SQL 注入根因"}`),
+					llm.TextBlock(string(body)),
 				}}, "end_turn", llm.Usage{}, nil
 			}},
 			cfg: agent.Config{Model: "test-model"},
 		}},
 	}
-	suggestReq := httptest.NewRequest(http.MethodPost, "/api/exploration/finding-cases/suggest",
-		bytes.NewBufferString(`{"finding_ids":[105,108]}`))
-	suggestRec := httptest.NewRecorder()
-	s.suggestFindingCase(suggestRec, suggestReq)
-	if suggestRec.Code != http.StatusOK {
-		t.Fatalf("suggest status=%d body=%s", suggestRec.Code, suggestRec.Body.String())
-	}
-	var suggestion findingCaseSuggestion
-	if err := json.Unmarshal(suggestRec.Body.Bytes(), &suggestion); err != nil {
-		t.Fatal(err)
-	}
-	if suggestion.Title != "订单查询 SQL 注入" || suggestion.Reason == "" {
-		t.Fatalf("unexpected AI suggestion: %+v", suggestion)
+	s.seedFindingMergerAgent()
+	if agentRow, err := m.pg.GetAgentByKey(agent.FindingMergerAgentKey); err != nil || agentRow == nil {
+		t.Fatalf("finding merger agent was not seeded: agent=%+v err=%v", agentRow, err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/exploration/finding-cases",
-		bytes.NewBufferString(`{"finding_ids":[105,108],"title":"订单查询 SQL 注入","reason":"两条记录使用同一 order_id 参数并命中相同 SQL 注入根因"}`))
-	rec := httptest.NewRecorder()
-	s.mergeFindingCase(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("merge status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var item db.FindingCase
-	if err := json.Unmarshal(rec.Body.Bytes(), &item); err != nil {
+	job := &db.FindingMergeJob{TaskID: &taskID, FindingIDs: findingIDs, Mode: "cluster"}
+	caseIDs, ungrouped, err := s.executeFindingMergeAgent(t.Context(), job)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if item.TaskID == nil || *item.TaskID != 4 || item.Count != 2 {
-		t.Fatalf("merge did not infer task4: %+v", item)
+	if len(caseIDs) != 3 || len(ungrouped) != 0 {
+		t.Fatalf("case_ids=%v ungrouped=%v, want 3 groups and no ungrouped", caseIDs, ungrouped)
 	}
-	defer m.pg.DeleteFindingCase(t.Context(), item.ID)
+	for i, caseID := range caseIDs {
+		defer m.pg.DeleteFindingCase(t.Context(), caseID)
+		item, getErr := m.pg.GetFindingCase(t.Context(), caseID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if item.TaskID == nil || *item.TaskID != 4 || item.Count != 2 ||
+			item.Title != reportTitles[i] || item.Report == "" || item.SeverityReason == "" {
+			t.Fatalf("case %d mismatch: %+v", i, item)
+		}
+	}
 
-	detailReq := httptest.NewRequest(http.MethodGet, "/api/exploration/finding-cases/"+strconv.FormatInt(item.ID, 10), nil)
-	detailReq.SetPathValue("id", strconv.FormatInt(item.ID, 10))
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/exploration/finding-cases/"+strconv.FormatInt(caseIDs[0], 10), nil)
+	detailReq.SetPathValue("id", strconv.FormatInt(caseIDs[0], 10))
 	detailRec := httptest.NewRecorder()
 	s.getFindingCase(detailRec, detailReq)
 	if detailRec.Code != http.StatusOK {
 		t.Fatalf("detail status=%d body=%s", detailRec.Code, detailRec.Body.String())
 	}
 	var detail struct {
-		Members []db.DBFinding `json:"members"`
+		Members []FindingDTO `json:"members"`
 	}
 	if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
@@ -172,15 +211,54 @@ func TestFindingCaseAPIIntegrationTask4Findings105And108(t *testing.T) {
 	if len(detail.Members) != 2 {
 		t.Fatalf("members=%d, want 2", len(detail.Members))
 	}
-
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/exploration/finding-cases/"+strconv.FormatInt(item.ID, 10), nil)
-	deleteReq.SetPathValue("id", strconv.FormatInt(item.ID, 10))
-	deleteRec := httptest.NewRecorder()
-	s.deleteFindingCase(deleteRec, deleteReq)
-	if deleteRec.Code != http.StatusOK {
-		t.Fatalf("delete status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	for _, member := range detail.Members {
+		if member.ID == "" || member.FindingID == "" || member.Name == "" {
+			t.Fatalf("member DTO contract is incomplete: %+v", member)
+		}
 	}
-	for _, id := range []int64{105, 108} {
+	var rawDetail struct {
+		Members []map[string]any `json:"members"`
+	}
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &rawDetail); err != nil {
+		t.Fatal(err)
+	}
+	if len(rawDetail.Members) == 0 || rawDetail.Members[0]["id"] == nil || rawDetail.Members[0]["ID"] != nil {
+		t.Fatalf("member JSON must expose lowercase id: %s", detailRec.Body.String())
+	}
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/api/report?task=4", nil)
+	reportRec := httptest.NewRecorder()
+	s.getReport(reportRec, reportReq)
+	if reportRec.Code != http.StatusOK {
+		t.Fatalf("report status=%d body=%s", reportRec.Code, reportRec.Body.String())
+	}
+	reportBody := reportRec.Body.String()
+	if !strings.Contains(reportBody, "确认发现：**3** 个") {
+		t.Fatalf("task report did not count three groups:\n%s", reportBody)
+	}
+	for _, title := range reportTitles {
+		if !strings.Contains(reportBody, title) {
+			t.Fatalf("task report missing case %q:\n%s", title, reportBody)
+		}
+	}
+
+	docxReq := httptest.NewRequest(http.MethodGet, "/api/report/docx?task=4", nil)
+	docxRec := httptest.NewRecorder()
+	s.exportTaskDocx(docxRec, docxReq)
+	if docxRec.Code != http.StatusOK || docxRec.Body.Len() == 0 {
+		t.Fatalf("docx status=%d body=%s", docxRec.Code, docxRec.Body.String())
+	}
+
+	for _, caseID := range caseIDs {
+		deleteReq := httptest.NewRequest(http.MethodDelete, "/api/exploration/finding-cases/"+strconv.FormatInt(caseID, 10), nil)
+		deleteReq.SetPathValue("id", strconv.FormatInt(caseID, 10))
+		deleteRec := httptest.NewRecorder()
+		s.deleteFindingCase(deleteRec, deleteReq)
+		if deleteRec.Code != http.StatusOK {
+			t.Fatalf("delete status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+		}
+	}
+	for _, id := range findingIDs {
 		finding, getErr := m.pg.GetFinding(id)
 		if getErr != nil || finding == nil {
 			t.Fatalf("finding #%d must survive group deletion: finding=%+v err=%v", id, finding, getErr)

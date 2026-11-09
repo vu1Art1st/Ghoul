@@ -137,6 +137,51 @@ function Row({
   );
 }
 
+function CaseRow({
+  members,
+  contextTaskId,
+  onStatus,
+}: {
+  members: Finding[];
+  contextTaskId: string;
+  onStatus: (f: Finding, next: FindingStatus) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const first = members[0];
+  if (!first) return null;
+  const severity = first.case_severity || first.severity;
+  return (
+    <div className="border-b last:border-b-0">
+      <button
+        type="button"
+        className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm hover:bg-accent/40"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <ChevronRightIcon
+          className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
+        />
+        <StatusBadge domain="severity" value={severity} dot />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-medium">{first.case_title || "漏洞组"}</span>
+            <Badge variant="outline" className="shrink-0">
+              {first.case_count || members.length} 条证据
+            </Badge>
+          </div>
+          <span className="truncate text-xs text-muted-foreground">{first.case_reason || first.summary}</span>
+        </div>
+      </button>
+      {open ? (
+        <div className="border-t bg-muted/20">
+          {members.map((finding) => (
+            <Row key={finding.id} f={finding} contextTaskId={contextTaskId} onStatus={onStatus} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function FindingsTab({ taskId }: { taskId: string }) {
   const [findings, setFindings] = React.useState<Finding[]>([]);
   const [sortPreference, setSortPreference] = useStoredSortPreference(
@@ -186,6 +231,21 @@ export function FindingsTab({ taskId }: { taskId: string }) {
       if (compared !== 0) return sortPreference.direction === "asc" ? compared : -compared;
       return b.id.localeCompare(a.id, undefined, { numeric: true });
     });
+  const entries: Array<{ key: string; caseMembers?: Finding[]; finding?: Finding }> = [];
+  const caseIndex = new Map<string, number>();
+  for (const finding of items) {
+    if (!finding.case_id) {
+      entries.push({ key: `finding:${finding.id}`, finding });
+      continue;
+    }
+    const existing = caseIndex.get(finding.case_id);
+    if (existing === undefined) {
+      caseIndex.set(finding.case_id, entries.length);
+      entries.push({ key: `case:${finding.case_id}`, caseMembers: [finding] });
+    } else {
+      entries[existing].caseMembers?.push(finding);
+    }
+  }
 
   return (
     <Card className="overflow-hidden py-0">
@@ -211,10 +271,14 @@ export function FindingsTab({ taskId }: { taskId: string }) {
             )}
           </button>
         </div>
-        {items.map((f) => (
-          <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
-        ))}
-        {items.length === 0 && (
+        {entries.map((entry) =>
+          entry.caseMembers ? (
+            <CaseRow key={entry.key} members={entry.caseMembers} contextTaskId={taskId} onStatus={onStatus} />
+          ) : entry.finding ? (
+            <Row key={entry.key} f={entry.finding} contextTaskId={taskId} onStatus={onStatus} />
+          ) : null,
+        )}
+        {entries.length === 0 && (
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">本任务及直接关联任务暂无确认发现。</p>
         )}
       </CardContent>

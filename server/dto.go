@@ -326,6 +326,11 @@ type FindingDTO struct {
 	SourceTaskID    string            `json:"source_task_id,omitempty"`
 	Inherited       bool              `json:"inherited,omitempty"`
 	Assets          []FindingAssetDTO `json:"assets,omitempty"`
+	CaseID          string            `json:"case_id,omitempty"`
+	CaseTitle       string            `json:"case_title,omitempty"`
+	CaseSeverity    string            `json:"case_severity,omitempty"`
+	CaseReason      string            `json:"case_reason,omitempty"`
+	CaseCount       int               `json:"case_count,omitempty"`
 	TS              string            `json:"ts"`
 }
 
@@ -418,6 +423,13 @@ func findingDTOsForOwner(taskID, description string, in []*db.Node, meta map[int
 			d.Status = m.Status
 			d.TrafficCount = m.TrafficCount
 			d.Assets = findingAssetDTOs(m.AssetIDs, assets)
+			if m.CaseID > 0 {
+				d.CaseID = i64s(m.CaseID)
+				d.CaseTitle = m.CaseTitle
+				d.CaseSeverity = m.CaseSeverity
+				d.CaseReason = m.CaseReason
+				d.CaseCount = m.CaseCount
+			}
 		}
 		out = append(out, d)
 	}
@@ -458,6 +470,13 @@ func findingFromDB(f *db.DBFinding, assets map[int64]*db.Asset) FindingDTO {
 		TS:        rfc3339(f.CreatedAt),
 	}
 	d.Assets = findingAssetDTOs(f.AssetIDs, assets)
+	if f.CaseID > 0 {
+		d.CaseID = i64s(f.CaseID)
+		d.CaseTitle = f.CaseTitle
+		d.CaseSeverity = f.CaseSeverity
+		d.CaseReason = f.CaseReason
+		d.CaseCount = f.CaseCount
+	}
 	if f.TaskID != nil {
 		d.TaskID = i64s(*f.TaskID)
 		d.TaskDescription = f.TaskDescription

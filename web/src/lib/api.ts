@@ -53,6 +53,7 @@ import type {
   FindingEvidence,
   FindingEvidenceTimeline,
   FindingGroupsPage,
+  FindingMergeJob,
   FindingQuery,
   FindingRetest,
   FindingStats,
@@ -788,6 +789,14 @@ export const api = {
     post<FindingCaseSuggestion>("/exploration/finding-cases/suggest", {
       finding_ids: findingIds.map(Number),
     }),
+  createFindingMergeJob: (findingIds: string[]) =>
+    post<FindingMergeJob>("/exploration/finding-cases/agent-jobs", {
+      finding_ids: findingIds.map(Number),
+    }),
+  findingMergeJob: (id: string) =>
+    get<FindingMergeJob>(`/exploration/finding-cases/agent-jobs/${encodeURIComponent(id)}`),
+  regenerateFindingCase: (id: string) =>
+    post<FindingMergeJob>(`/exploration/finding-cases/${encodeURIComponent(id)}/regenerate`, {}),
   updateFindingCase: (
     id: string,
     input: { version: number; title: string; report: string; severity: Severity; reason: string },

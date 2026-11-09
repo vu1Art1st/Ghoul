@@ -515,6 +515,11 @@ export interface Finding {
   source_task_id?: string;
   inherited?: boolean;
   assets?: FindingAsset[];
+  case_id?: string;
+  case_title?: string;
+  case_severity?: Severity;
+  case_reason?: string;
+  case_count?: number;
   ts: string;
 }
 
@@ -592,6 +597,21 @@ export interface FindingCaseSuggestion {
   title: string;
   reason: string;
   task_id?: string;
+}
+
+export interface FindingMergeJob {
+  id: string;
+  task_id?: string;
+  finding_ids: number[];
+  case_id?: string;
+  case_ids: number[];
+  ungrouped_finding_ids: number[];
+  group_count: number;
+  mode: "cluster" | "regenerate";
+  status: "queued" | "clustering" | "reporting" | "saving" | "running" | "succeeded" | "failed";
+  error?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // FindingsPage 是发现列表的服务端分页响应。
