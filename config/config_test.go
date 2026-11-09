@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,9 +11,11 @@ func TestPostgresDSNPrecedence(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	os.WriteFile(cfgPath, []byte(`{"database":{"host":"10.1.2.3","port":6000,"user":"u","password":"p","dbname":"d","sslmode":"require"}}`), 0o644)
-	t.Setenv("ARTEX_CONFIG", cfgPath)
+	t.Setenv("GHOUL_CONFIG", cfgPath)
+	t.Setenv("ARTEX_CONFIG", "")
 
 	// no env DSN → built from config file fields
+	t.Setenv("GHOUL_PG_DSN", "")
 	t.Setenv("ARTEX_PG_DSN", "")
 	got, _, err := PostgresDSN()
 	want := "postgres://u:p@10.1.2.3:6000/d?sslmode=require"
@@ -21,23 +24,43 @@ func TestPostgresDSNPrecedence(t *testing.T) {
 	}
 
 	// env wins over config file
-	t.Setenv("ARTEX_PG_DSN", "postgres://envwins/x")
+	t.Setenv("GHOUL_PG_DSN", "postgres://envwins/x")
 	if got, _, err := PostgresDSN(); err != nil || got != "postgres://envwins/x" {
 		t.Fatalf("env should win, got %q err %v", got, err)
 	}
 
 	// no env, no file → error (no built-in default)
-	t.Setenv("ARTEX_PG_DSN", "")
-	t.Setenv("ARTEX_CONFIG", filepath.Join(dir, "nope.json"))
+	t.Setenv("GHOUL_PG_DSN", "")
+	t.Setenv("GHOUL_CONFIG", filepath.Join(dir, "nope.json"))
 	if got, _, err := PostgresDSN(); err == nil {
 		t.Fatalf("missing config should error, got %q", got)
 	}
 
 	// full dsn in config file is used verbatim
 	os.WriteFile(cfgPath, []byte(`{"database":{"dsn":"postgres://full/dsn"}}`), 0o644)
-	t.Setenv("ARTEX_CONFIG", cfgPath)
+	t.Setenv("GHOUL_CONFIG", cfgPath)
 	if got, _, err := PostgresDSN(); err != nil || got != "postgres://full/dsn" {
 		t.Fatalf("file dsn verbatim, got %q err %v", got, err)
+	}
+}
+
+func TestLegacyEnvFallback(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "legacy.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"database":{"dsn":"postgres://file/db"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GHOUL_CONFIG", "")
+	t.Setenv("ARTEX_CONFIG", cfgPath)
+	t.Setenv("GHOUL_PG_DSN", "")
+	t.Setenv("ARTEX_PG_DSN", "postgres://legacy/db")
+
+	got, source, err := PostgresDSN()
+	if err != nil || got != "postgres://legacy/db" {
+		t.Fatalf("legacy env fallback: got %q err %v", got, err)
+	}
+	if source == "" || !strings.Contains(source, "ARTEX_PG_DSN") {
+		t.Fatalf("source should identify the legacy variable: %q", source)
 	}
 }
 
@@ -47,7 +70,8 @@ func TestC2DefaultsFailClosed(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(`{"database":{"dsn":"postgres://example/db"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("ARTEX_CONFIG", cfgPath)
+	t.Setenv("GHOUL_CONFIG", cfgPath)
+	t.Setenv("ARTEX_CONFIG", "")
 
 	got := Load().EffectiveC2()
 	if got.Provider != DefaultC2Provider {
@@ -104,7 +128,8 @@ func TestC2ExplicitReadOnlyEnable(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("ARTEX_CONFIG", cfgPath)
+	t.Setenv("GHOUL_CONFIG", cfgPath)
+	t.Setenv("ARTEX_CONFIG", "")
 
 	got := Load().EffectiveC2()
 	if !got.Enabled || got.Provider != DefaultC2Provider {

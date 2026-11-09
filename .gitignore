@@ -35,8 +35,16 @@ Thumbs.db
 .claude/
 
 # 内嵌前端的单二进制产物
+/ghoul
+/ghoul.exe
 /artex
 # 一键更新在可执行文件旁留下的中间产物（暂存件 / 备份 / 失败版本 / 升级标记）
+/ghoul.new
+/ghoul.new.sha256
+/ghoul.old
+/ghoul.failed
+/ghoul.upgrade.json
+# 旧版 ARTEX 命名继续忽略，避免迁移期误提交
 /artex.new
 /artex.new.sha256
 /artex.old

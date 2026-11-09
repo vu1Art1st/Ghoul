@@ -8,7 +8,7 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 
 🌐 **在线 Demo（模拟数据）**： [https://artex-demo.mhtsec.com](https://artex-demo.mhtsec.com)
 
-📦 **Ghoul 由 ARTEX 演进而来，现为独立仓库：[vu1Art1st/Ghoul](https://github.com/vu1Art1st/Ghoul)。原 Docker 镜像源 `autumn27/artex` 已失效，现由本仓库维护为 `mianhuatang11/artex`；Docker Hub 拉取失败时，用 `docker compose build` 从源码本地构建，无需任何外部预构建产物。**
+📦 **Ghoul 由 ARTEX 演进而来，现为独立仓库：[vu1Art1st/Ghoul](https://github.com/vu1Art1st/Ghoul)。Docker 镜像由本仓库维护为 `mianhuatang11/ghoul`；Docker Hub 拉取失败时，用 `docker compose build` 从源码本地构建，无需任何外部预构建产物。**
 
 </div>
 
@@ -52,7 +52,7 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 ## 审批记录详情
 
 全局「审批记录」、任务内「拦截审批」及对话中的审批卡片均支持展开查看详情。展示结构参考
-[AegisHook 的审批详情组件](https://github.com/RuoJi6/AegisHook/blob/main/web/src/components/CallDetail.vue)，沿用 ARTEX 的组件和主题：
+[AegisHook 的审批详情组件](https://github.com/RuoJi6/AegisHook/blob/main/web/src/components/CallDetail.vue)，沿用 Ghoul 的组件和主题：
 
 
 ## 资产同步（ScopeSentry）
@@ -61,7 +61,7 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 
 - 在「**资产同步**」页填 ScopeSentry 的地址与 API Key，接入数据源；
 - 按**项目**或**任务**维度选择要同步的目标与资产类型（域名 / 子域 / IP / 端口 / 站点 / 端点…）；
-- 一键导入并按公司资产范围归并，直接进入 ARTEX 的资产图供 agent 探索使用。
+- 一键导入并按公司资产范围归并，直接进入 Ghoul 的资产图供 agent 探索使用。
 
 ---
 
@@ -90,11 +90,11 @@ cd Ghoul
 git clone https://github.com/vu1Art1st/Ghoul.git
 cd Ghoul
 cp .env.example .env          # 填 POSTGRES_PASSWORD、可选 ANTHROPIC_API_KEY
-docker compose up -d          # 拉取 mianhuatang11/artex 镜像 + postgres
+docker compose up -d          # 拉取 mianhuatang11/ghoul 镜像 + postgres
 # → http://localhost:8787
 ```
 
-> 原镜像源 `autumn27/artex` 已从 Docker Hub 删除，镜像现由本仓库自维护为 **`mianhuatang11/artex`**。
+> 镜像现由本仓库自维护为 **`mianhuatang11/ghoul`**。
 > 镜像源不可用（或想自行改代码）时，本地从纯源码构建即可：`docker compose build && docker compose up -d`。
 > Dockerfile 为多阶段构建（前端静态导出 → Go 静态编译 → 运行镜像），默认走国内友好依赖源，可加 `--build-arg GOPROXY=... / --build-arg NPM_REGISTRY=...` 覆盖。
 
@@ -107,15 +107,15 @@ docker compose up -d          # 拉取 mianhuatang11/artex 镜像 + postgres
 
 ### 方式三：下载预编译二进制（Releases）
 
-到原仓库 [Releases](https://github.com/Autumn-27/ARTEX/releases) 下载对应平台的 zip（**本备份仓库不托管二进制**，若原 Releases 也失效请用方式二或方式四）：解压后得到 `artex` + `start.sh`（Windows 为 `start.bat`）+ `skills/` + `config.example.json`：
+到 [Ghoul Releases](https://github.com/vu1Art1st/Ghoul/releases) 下载对应平台的 zip；如当前版本尚未发布预编译包，请使用方式二或方式四。解压后得到 `ghoul` + `start.sh`（Windows 为 `start.bat`）+ `skills/` + `config.example.json`：
 
 ```bash
 cp config.example.json config.json   # 填好 database 连接
 ./start.sh                           # → http://localhost:8787
 ```
 
-> 请用 `start.sh` / `start.bat` 启动，而不是直接跑 `./artex`。它是个守护脚本：程序退出后按退出码决定是否重新拉起，**页面上的[一键更新](#方式一页面一键更新推荐)靠它完成换装**。直接运行 `./artex` 时更新完就不会被拉起了。
-> 后台常驻：`nohup ./start.sh >artex.log 2>&1 &`。
+> 请用 `start.sh` / `start.bat` 启动，而不是直接跑 `./ghoul`。它是个守护脚本：程序退出后按退出码决定是否重新拉起，**页面上的[一键更新](#方式一页面一键更新推荐)靠它完成换装**。直接运行 `./ghoul` 时更新完就不会被拉起了。
+> 后台常驻：`nohup ./start.sh >ghoul.log 2>&1 &`。
 
 ### 方式四：从源码编译单二进制
 
@@ -125,7 +125,7 @@ cd web && npm ci && npm run build:static && cd ..
 # 2) 拷进内嵌目录
 cp -r web/out server/webui/dist
 # 3) 编译（-tags embedui 才内嵌前端）
-CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
+CGO_ENABLED=0 go build -tags embedui -o ghoul ./cmd/ghoul
 ./start.sh
 ```
 
@@ -135,13 +135,13 @@ CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
 
 ```bash
 ./build.sh --release
-# 产物：dist/artex-0.3.3-*.zip
+# 产物：dist/ghoul-0.3.3-*.zip
 ```
 
-UPX 自解压二进制可能与部分 Linux 内核、虚拟化环境或安全策略不兼容，因此默认不启用。可用 `ARTEX_TARGETS` 自定义目标；确认目标运行环境兼容时，可显式传入 `--upx` 进一步缩小二进制：
+UPX 自解压二进制可能与部分 Linux 内核、虚拟化环境或安全策略不兼容，因此默认不启用。可用 `GHOUL_TARGETS` 自定义目标；确认目标运行环境兼容时，可显式传入 `--upx` 进一步缩小二进制：
 
 ```bash
-ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
+GHOUL_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 ./build.sh --target linux/amd64 --upx
 ```
 
@@ -149,19 +149,19 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 
 ## 更新升级
 
-> 升级只换程序、不动数据：Postgres 数据卷 `pgdata`、`./data`（jwt.key / SQLite 等）、`./skills` 都会保留。**数据库迁移无需手动执行**——`artex` 每次启动会幂等重跑 `schema.sql`（含 `ADD COLUMN` / `CREATE INDEX IF NOT EXISTS`），即“重启即迁移”。升级前仍建议先备份 `./data` 与数据库。
+> 升级只换程序、不动数据：Postgres 数据卷 `pgdata`、`./data`（jwt.key / SQLite 等）、`./skills` 都会保留。**数据库迁移无需手动执行**——`ghoul` 每次启动会幂等重跑 `schema.sql`（含 `ADD COLUMN` / `CREATE INDEX IF NOT EXISTS`），即“重启即迁移”。升级前仍建议先备份 `./data` 与数据库。
 
 ### 方式一：页面一键更新（推荐）
 
 在 **系统配置** 页（侧边栏「系统配置」→ `/system/settings`）的**版本与更新**卡片里，可以直接检查并安装新版本，无需登录服务器。
 
-点「更新」后：下载当前平台的发布包 → 比对 Release 的 `SHA256SUMS` → 用 `-h` 冒烟测试新二进制 → 暂存为 `artex.new` → 程序退出，由 `start.sh` / `start.bat` 重新拉起并完成换装。页面会自动等到新版本上线后刷新。
+点「更新」后：下载当前平台的发布包 → 比对 Release 的 `SHA256SUMS` → 用 `-h` 冒烟测试新二进制 → 暂存为 `ghoul.new` → 程序退出，由 `start.sh` / `start.bat` 重新拉起并完成换装。页面会自动等到新版本上线后刷新。
 
-- **失败不会留下坏程序**：校验或冒烟不通过就丢弃暂存件、继续跑当前版本；换装后的新版若连续 3 次启动失败，会自动回滚到 `artex.old`（失败的那个留作 `artex.failed` 供排查）。
-- **随时可回退**：上一版本保留为 `artex.old`，卡片上有「回滚到上一版本」。注意数据库结构不会回退。
+- **失败不会留下坏程序**：校验或冒烟不通过就丢弃暂存件、继续跑当前版本；换装后的新版若连续 3 次启动失败，会自动回滚到 `ghoul.old`（失败的那个留作 `ghoul.failed` 供排查）。
+- **随时可回退**：上一版本保留为 `ghoul.old`，卡片上有「回滚到上一版本」。注意数据库结构不会回退。
 - **更新会中断正在运行的任务**——更新即重启，请在空闲时进行。
 - **开发构建不给更新**：版本号是 `dev` 或 `git describe` 带后缀时禁用，避免正式版覆盖掉本地调试的二进制。
-- **Docker 下只换程序、不换镜像**：镜像里的 playwright / nmap 等工具链不会跟着升级，且 `docker compose up -d` 重建容器后会退回镜像自带的版本。要连镜像一起升级仍请用 `docker compose pull artex && docker compose up -d artex`。
+- **Docker 下只换程序、不换镜像**：镜像里的 playwright / nmap 等工具链不会跟着升级，且 `docker compose up -d` 重建容器后会退回镜像自带的版本。要连镜像一起升级仍请用 `docker compose pull ghoul && docker compose up -d ghoul`。
 - 访问 GitHub 需要代理时，在同一页面配置**全局代理**即可，更新链路会走它。更新只从 GitHub 域名下载并强制 HTTPS。
 
 ### 方式二：一键更新脚本
@@ -173,26 +173,26 @@ cd Ghoul
 
 脚本先可选 `git pull` 拉取最新代码，再让你选 **① Docker 更新** 或 **② 本地编译更新**（与 `install.sh` 对应）：
 
-- **① Docker**：可指定目标镜像 tag（回车沿用 `.env` 的 `ARTEX_TAG`，缺省 `latest`）→ `docker compose pull` → `docker compose up -d`（换新镜像重启即自动迁移）。
-- **② 本地**：重建前端静态产物 → 重新编译 `./artex`（完成后重启进程生效）。
+- **① Docker**：可指定目标镜像 tag（回车沿用 `.env` 的 `GHOUL_TAG`，缺省 `latest`；旧 `ARTEX_TAG` 仍兼容）→ `docker compose pull` → `docker compose up -d`（换新镜像重启即自动迁移）。
+- **② 本地**：重建前端静态产物 → 重新编译 `./ghoul`（完成后通过 `./start.sh` 重启生效）。
 
 ### 方式三：Docker Compose（手动）
 
 ```bash
 cd Ghoul
 git pull                       # 更新 compose / 脚本（可选）
-# 指定版本：在 .env 设 ARTEX_TAG=v0.2.0；不设则用 latest
-docker compose pull artex
-docker compose up -d artex     # 换新镜像重启 → 自动迁移 schema
+# 指定版本：在 .env 设 GHOUL_TAG=v0.2.0；不设则用 latest
+docker compose pull ghoul
+docker compose up -d ghoul     # 换新镜像重启 → 自动迁移 schema
 docker image prune -f          # 清理旧镜像（可选）
 ```
 
 ### 方式四：预编译二进制（Releases）
 
-到 [Releases](https://github.com/Autumn-27/ARTEX/releases) 下载新版本 zip，停掉旧进程后覆盖 `artex` 与 `skills/`（保留你的 `config.json` 与 `data/`），重启即可：
+到 [Ghoul Releases](https://github.com/vu1Art1st/Ghoul/releases) 下载新版本 zip，停掉旧进程后覆盖 `ghoul` 与 `skills/`（保留你的 `config.json` 与 `data/`），重启即可：
 
 ```bash
-cp -r <解压目录>/skills ./ && cp <解压目录>/artex ./
+cp -r <解压目录>/skills ./ && cp <解压目录>/ghoul ./
 ./start.sh
 ```
 
@@ -202,7 +202,7 @@ cp -r <解压目录>/skills ./ && cp <解压目录>/artex ./
 git pull
 cd web && npm ci && npm run build:static && cd ..
 cp -r web/out server/webui/dist
-CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
+CGO_ENABLED=0 go build -tags embedui -o ghoul ./cmd/ghoul
 # 重启 ./start.sh
 ```
 
@@ -210,96 +210,36 @@ CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
 
 ## 配置
 
-**数据库**（`config.json`，或用环境变量 `ARTEX_PG_DSN` 覆盖）：
+**数据库**（`config.json`，或用环境变量 `GHOUL_PG_DSN` 覆盖；旧 `ARTEX_PG_DSN` 仍兼容）：
 
 ```json
 {
   "database": {
     "host": "127.0.0.1", "port": 5432,
-    "user": "artex", "password": "yourpass",
-    "dbname": "artex", "sslmode": "disable"
+    "user": "ghoul", "password": "yourpass",
+    "dbname": "ghoul", "sslmode": "disable"
   }
 }
 ```
 
 **LLM**：`export ANTHROPIC_API_KEY=sk-...`（或 `OPENAI_API_KEY`），也可在 UI 的「LLM 配置」页填写。
-可选：`ARTEX_LLM_PROVIDER` / `ARTEX_LLM_MODEL` / `ARTEX_LLM_BASE_URL` / `ARTEX_LLM_PROXY`。
+可选：`GHOUL_LLM_PROVIDER` / `GHOUL_LLM_MODEL` / `GHOUL_LLM_BASE_URL` / `GHOUL_LLM_PROXY` / `GHOUL_LLM_STREAM`。
+
+**环境变量**：新配置统一使用 `GHOUL_*`；迁移期继续兼容 `ARTEX_*`，且 `GHOUL_*` 优先。
+
+| 用途 | 推荐变量 | 兼容变量 |
+| --- | --- | --- |
+| 配置文件路径 | `GHOUL_CONFIG` | `ARTEX_CONFIG` |
+| PostgreSQL DSN | `GHOUL_PG_DSN` | `ARTEX_PG_DSN` |
+| Skill 目录 | `GHOUL_SKILL_DIR` | `ARTEX_SKILL_DIR` |
+| LLM Provider / Model / Base URL / Proxy | `GHOUL_LLM_*` | `ARTEX_LLM_*` |
+| Docker 镜像 tag | `GHOUL_TAG` | `ARTEX_TAG` |
+| 通知本地目标开关 | `GHOUL_NOTIFY_ALLOW_LOCAL` | `ARTEX_NOTIFY_ALLOW_LOCAL` |
+| `/btw` 输出上限 | `GHOUL_BTW_MAX_OUTPUT_TOKENS` | `ARTEX_BTW_MAX_OUTPUT_TOKENS` |
 
 **并发**：每个任务的 work agent 数在「系统设置」里配置（默认 3）。
 
-**常用参数**：`./start.sh -addr :8787 -proxy :8788`（`-addr` 前端+API，`-proxy` 流量录制代理）。启动脚本会把参数原样透传给 `artex`。
-
-### Toshell C2 集成（Phase 0）
-
-Ghoul 将 Toshell 作为唯一 C2 后端，但两者保持独立进程和独立数据库。Phase 0 已冻结 Toshell `v1.4.3`（commit `8bf4643c1affbe109993123475422f6d26897903`）的 REST 契约，不复制 Toshell 源码，也不在 Ghoul 页面中 iframe 嵌入其控制台。
-
-```json
-{
-  "c2": {
-    "enabled": false,
-    "provider": "toshell",
-    "base_url": "http://127.0.0.1:18081",
-    "api_key_ref": "env:TOSHELL_API_KEY",
-    "allow_confirm": false,
-    "allow_danger": false
-  }
-}
-```
-
-- C2 默认关闭；未知 provider、关闭适配器或未开启 Confirm 时，写入能力会自动收敛为关闭。
-- `api_key_ref` 只能是 secret reference，禁止填写 Toshell API Key 明文。
-- 已保存 `/api/v1/health`、`/api/v1/mcp/tools`、`/api/v1/sessions` 契约快照，并验证 sidecar 健康检查。
-- Toshell 全量 38 个工具估算为 `10,705` tokens（含安全余量 `13,917`）；Ghoul 只暴露 8 个原生 `c2_*` 工具，估算 `955` tokens（含安全余量 `1,242`，预算 `2,000`）。
-- Planner 默认只加载 `c2_session_list`、`c2_session_context`、`c2_recon` 三个只读工具。
-- Ghoul UI 负责会话查看/绑定、审批、常用操作和证据；载荷构建、监听器高级配置、插件、AV-Ops、BYOVD/EDR/PPL、驱动和注入保留在 Toshell 控制台。
-
-接入说明、sidecar 模板、快照刷新和契约测试见 [`integrations/toshell/README.md`](integrations/toshell/README.md)。本轮新增与修改的 Ghoul 代码继续按 AGPL-3.0 发布；Toshell 仍为 MIT，未将其源码纳入 Ghoul 二进制。
-
-> Phase 0 测试记录：`go test ./config ./integrations/toshell/...` 通过。全仓基线中，除 `server` 包依赖本机 PostgreSQL 配置以及 4 个既有 Windows 路径分隔符断言外，其余包通过；这些既有环境/平台问题不属于本次 C2 改动。
-
-### 可靠性基础（Phase 1）
-
-Phase 1 已合并长任务可靠性、预算、恢复和运维访问控制。所有能力均保持 Toshell 为唯一 C2 后端，没有引入 Pojun/artex-ymh 的监听器、植入端或隧道实现。
-
-- **Planner handoff**：跨唤醒 todolist 持久化到 PostgreSQL，版本 CAS 防止并发覆盖；恢复失败只降级为内存规划，不影响业务图。
-- **完成审计**：`prove_goal` 拒绝推断事实、空证据和 `partial/blocked` 检查点，避免提前收官。
-- **Worker 预算与空转控制**：意图 token 软预算触发一次写回收尾提醒；相同工具和参数连续调用第 3 次起拦截，最多拦截 2 次；连续无写回触发 `idle_stop`。
-- **Deadline 冻结感知**：VM/宿主机挂起造成超长睡眠时，按超睡时长顺延内存 deadline，避免恢复后误判任务超时。
-- **执行模式**：目标明确要求“仅漏洞验证、不拿权限、不横向”时，Planner 注入最高优先级模式约束。
-- **HTTP Basic Auth**：独立于 Ghoul 登录账号的访问门，支持密码哈希、HMAC 隔离的 HttpOnly Cookie、即时启用/关闭和凭据轮换失效。
-- **Egress Probe 与代理池**：全局代理可测试出口 IP/延迟；关闭流量捕获时可按轮询使用代理池，捕获开启时仍由全局代理作为 MITM 上游。
-- **Repeater**：服务端直连、禁止环境代理/重定向/CONNECT，逐 DNS 地址校验任务范围、拦截规则和元数据地址，并限制请求/响应大小。
-- **日历任务**：复用 Ghoul 现有 trigger scheduler 的持久化触发模型，不额外复制一套重叠调度器。
-
-验证：`go build ./...`、`go vet ./...`、定向可靠性测试和 `pnpm exec tsc --noEmit` 通过。来源包括 ARTEX-main、Pojun、artex-ymh、artex-ld、RuoJi6/ARTEX；本轮新增与修改代码继续按 AGPL-3.0 发布。
-
-### 证据与漏洞闭环（Phase 2）
-
-Phase 2 在现有 `findings` 主表上统一了发现、证据、验证、复测、归并、派发和报告链路，没有引入第二套 Finding 数据模型。
-
-- **漏洞情报库**：支持 NVD、CISA KEV、GHSA、公开 PoC 和 nuclei 模板树同步；提供 `search_vulns`、`get_vuln`、`get_poc` 工具和系统「漏洞情报」页面，支持手动同步、中断、状态水位与组件检索。
-- **证据硬闸**：critical/high 必须有机械可复现证据；纯版本/banner 匹配不能直接判高危；凭据类漏洞必须记录实际登录成功或有效会话。重复上报按任务内指纹合并，并保留二次确认证据。
-- **统一证据时间线**：流量证据继续使用带哈希的快照和版本 CAS；命令输出、文件摘要、截图等通用证据写入 `finding_evidence`，两类证据通过同一 API 汇总展示，变更均递增 Finding 证据版本。
-- **验证与反证**：验证结论保存 `verified / false_positive / inconclusive`，要求至少一条实际反证排查项；按漏洞类别生成反证 checklist，并保存同类场景的转向提示。
-- **Finding 归并**：`finding_cases` 将同一根因的多次观测归并为交付条目，成员仍指向原始 Finding；支持人工归并、移出、统一报告版本和审计事件。
-- **显式派发**：已确认 Finding 可派发回原任务继续验证或利用，派发记录冻结当时的证据版本并写入审计。
-- **DOCX 报告**：任务总报告和单漏洞报告可导出 Word，包含统一报告、证据、流量绑定、复测记录、资产名称和证据截图引用。
-- **工具与 Skill**：新增 `component-vuln-intel` Skill，Planner/Worker/Pentest 默认可见，情报工具按 agent 绑定加载。
-
-验证：`go test ./vulnintel ./report ./findingverify ./agent ./db`、后端编译和 `pnpm exec tsc --noEmit` 通过。来源包括 Pojun、ARTEX-main、artex-ymh、artex-ld、RuoJi6/ARTEX；本轮新增与修改代码继续按 AGPL-3.0 发布，Toshell 仍保持独立 MIT sidecar 边界。
-
-### C2 只读接入（Phase 3）
-
-Phase 3 通过独立 Toshell REST/WS 客户端完成只读接入，Toshell 仍是唯一 C2 后端，Ghoul 不复制其源码、不暴露 API Key，也不把 38 个原始 MCP 工具注册给 Agent。
-
-- **REST 客户端**：支持 `health`、`sessions`、`tasks`、`listeners`、`channels/health`，API Key 只接受 `env:` / `file:` secret reference，GET 请求带有限重试，写接口不进入只读客户端。
-- **同步与恢复**：启动后全量对账；30 秒周期对账；消费 `/api/v1/ws/events` 的 `session_online`、`session_offline`、`task_completed`、`task_failed`；WS 断线后保留最后事件键并全量对账，避免重复事件和孤儿状态。
-- **会话绑定**：`c2_sessions`、`c2_session_bindings`、`c2_event_cursor`、`c2_events`、`c2_tasks`、`c2_listeners` 持久化到 PostgreSQL；未绑定会话不会出现在 Worker 的 C2 工具面。
-- **只读页面**：`/function/c2` 展示实例健康、会话、监听器、任务摘要、事件和任务/资产绑定；不 iframe 嵌入 Toshell 控制台。
-- **Planner 工具面**：`c2_session_list`、`c2_session_context`、`c2_recon` 以 deferred host tool 加载；Planner 默认 3 个，Worker 仅在任务已有绑定会话时获得同一裁剪面。`c2_recon` 在 Phase 3 只返回白名单动作和现有摘要，不创建 Toshell 任务。
-- **Token 基线**：Planner 只读 3 工具 schema 为 `327` tokens（含 1.3 安全余量 `426`），低于 `2,000` schema 预算；记录见 [`integrations/toshell/contract/phase3_readonly_baseline.json`](integrations/toshell/contract/phase3_readonly_baseline.json)。
-
-验证：`go test ./integrations/toshell/client ./integrations/toshell/contract`、后端编译和 `pnpm exec tsc --noEmit` 通过。Phase 3 不执行 Confirm/Danger 操作；审批式操作和证据物化在 Phase 4 落地。来源包括 Toshell、ARTEX-main、Pojun、artex-ymh、artex-ld、RuoJi6/ARTEX；Toshell 仍为独立 MIT sidecar，未纳入 Ghoul 二进制。
+**常用参数**：`./start.sh -addr :8787 -proxy :8788`（`-addr` 前端+API，`-proxy` 流量录制代理）。启动脚本会把参数原样透传给 `ghoul`。
 
 ### 反向代理部署（HTTPS / 只开放 443）
 
@@ -332,7 +272,123 @@ server {
 
 ---
 
+## 能力演进（Phase 0-6）
 
+### Phase 0：Toshell C2 集成
+
+Ghoul 将 Toshell 作为唯一 C2 后端，但两者保持独立进程和独立数据库。Phase 0 已冻结 Toshell `v1.4.3`（commit `8bf4643c1affbe109993123475422f6d26897903`）的 REST 契约，不复制 Toshell 源码，也不在 Ghoul 页面中 iframe 嵌入其控制台。
+
+```json
+{
+  "c2": {
+    "enabled": false,
+    "provider": "toshell",
+    "base_url": "http://127.0.0.1:18081",
+    "api_key_ref": "env:TOSHELL_API_KEY",
+    "allow_confirm": false,
+    "allow_danger": false
+  }
+}
+```
+
+- C2 默认关闭；未知 provider、关闭适配器或未开启 Confirm 时，写入能力会自动收敛为关闭。
+- `api_key_ref` 只能是 secret reference，禁止填写 Toshell API Key 明文。
+- 已保存 `/api/v1/health`、`/api/v1/mcp/tools`、`/api/v1/sessions` 契约快照，并验证 sidecar 健康检查。
+- Toshell 全量 38 个工具估算为 `10,705` tokens（含安全余量 `13,917`）；Ghoul 只暴露 8 个原生 `c2_*` 工具，估算 `955` tokens（含安全余量 `1,242`，预算 `2,000`）。
+- Planner 默认只加载 `c2_session_list`、`c2_session_context`、`c2_recon` 三个只读工具。
+- Ghoul UI 负责会话查看/绑定、审批、常用操作和证据；载荷构建、监听器高级配置、插件、AV-Ops、BYOVD/EDR/PPL、驱动和注入保留在 Toshell 控制台。
+
+接入说明、sidecar 模板、快照刷新和契约测试见 [`integrations/toshell/README.md`](integrations/toshell/README.md)。本轮新增与修改的 Ghoul 代码继续按 AGPL-3.0 发布；Toshell 仍为 MIT，未将其源码纳入 Ghoul 二进制。
+
+> Phase 0 测试记录：`go test ./config ./integrations/toshell/...` 通过。全仓基线中，除 `server` 包依赖本机 PostgreSQL 配置以及 4 个既有 Windows 路径分隔符断言外，其余包通过；这些既有环境/平台问题不属于本次 C2 改动。
+
+### Phase 1：可靠性基础
+
+Phase 1 已合并长任务可靠性、预算、恢复和运维访问控制。所有能力均保持 Toshell 为唯一 C2 后端，没有引入 Pojun/artex-ymh 的监听器、植入端或隧道实现。
+
+- **Planner handoff**：跨唤醒 todolist 持久化到 PostgreSQL，版本 CAS 防止并发覆盖；恢复失败只降级为内存规划，不影响业务图。
+- **完成审计**：`prove_goal` 拒绝推断事实、空证据和 `partial/blocked` 检查点，避免提前收官。
+- **Worker 预算与空转控制**：意图 token 软预算触发一次写回收尾提醒；相同工具和参数连续调用第 3 次起拦截，最多拦截 2 次；连续无写回触发 `idle_stop`。
+- **Deadline 冻结感知**：VM/宿主机挂起造成超长睡眠时，按超睡时长顺延内存 deadline，避免恢复后误判任务超时。
+- **执行模式**：目标明确要求“仅漏洞验证、不拿权限、不横向”时，Planner 注入最高优先级模式约束。
+- **HTTP Basic Auth**：独立于 Ghoul 登录账号的访问门，支持密码哈希、HMAC 隔离的 HttpOnly Cookie、即时启用/关闭和凭据轮换失效。
+- **Egress Probe 与代理池**：全局代理可测试出口 IP/延迟；关闭流量捕获时可按轮询使用代理池，捕获开启时仍由全局代理作为 MITM 上游。
+- **Repeater**：服务端直连、禁止环境代理/重定向/CONNECT，逐 DNS 地址校验任务范围、拦截规则和元数据地址，并限制请求/响应大小。
+- **日历任务**：复用 Ghoul 现有 trigger scheduler 的持久化触发模型，不额外复制一套重叠调度器。
+
+验证：`go build ./...`、`go vet ./...`、定向可靠性测试和 `pnpm exec tsc --noEmit` 通过。来源包括 ARTEX-main、Pojun、artex-ymh、artex-ld、RuoJi6/ARTEX；本轮新增与修改代码继续按 AGPL-3.0 发布。
+
+### Phase 2：证据与漏洞闭环
+
+Phase 2 在现有 `findings` 主表上统一了发现、证据、验证、复测、归并、派发和报告链路，没有引入第二套 Finding 数据模型。
+
+- **漏洞情报库**：支持 NVD、CISA KEV、GHSA、公开 PoC 和 nuclei 模板树同步；提供 `search_vulns`、`get_vuln`、`get_poc` 工具和系统「漏洞情报」页面，支持手动同步、中断、状态水位与组件检索。
+- **证据硬闸**：critical/high 必须有机械可复现证据；纯版本/banner 匹配不能直接判高危；凭据类漏洞必须记录实际登录成功或有效会话。重复上报按任务内指纹合并，并保留二次确认证据。
+- **统一证据时间线**：流量证据继续使用带哈希的快照和版本 CAS；命令输出、文件摘要、截图等通用证据写入 `finding_evidence`，两类证据通过同一 API 汇总展示，变更均递增 Finding 证据版本。
+- **验证与反证**：验证结论保存 `verified / false_positive / inconclusive`，要求至少一条实际反证排查项；按漏洞类别生成反证 checklist，并保存同类场景的转向提示。
+- **Finding 归并**：`finding_cases` 将同一根因的多次观测归并为交付条目，成员仍指向原始 Finding；支持人工归并、移出、统一报告版本和审计事件。
+- **显式派发**：已确认 Finding 可派发回原任务继续验证或利用，派发记录冻结当时的证据版本并写入审计。
+- **DOCX 报告**：任务总报告和单漏洞报告可导出 Word，包含统一报告、证据、流量绑定、复测记录、资产名称和证据截图引用。
+- **工具与 Skill**：新增 `component-vuln-intel` Skill，Planner/Worker/Pentest 默认可见，情报工具按 agent 绑定加载。
+
+验证：`go test ./vulnintel ./report ./findingverify ./agent ./db`、后端编译和 `pnpm exec tsc --noEmit` 通过。来源包括 Pojun、ARTEX-main、artex-ymh、artex-ld、RuoJi6/ARTEX；本轮新增与修改代码继续按 AGPL-3.0 发布，Toshell 仍保持独立 MIT sidecar 边界。
+
+### Phase 3：C2 只读接入
+
+Phase 3 通过独立 Toshell REST/WS 客户端完成只读接入，Toshell 仍是唯一 C2 后端，Ghoul 不复制其源码、不暴露 API Key，也不把 38 个原始 MCP 工具注册给 Agent。
+
+- **REST 客户端**：支持 `health`、`sessions`、`tasks`、`listeners`、`channels/health`，API Key 只接受 `env:` / `file:` secret reference，GET 请求带有限重试，写接口不进入只读客户端。
+- **同步与恢复**：启动后全量对账；30 秒周期对账；消费 `/api/v1/ws/events` 的 `session_online`、`session_offline`、`task_completed`、`task_failed`；WS 断线后保留最后事件键并全量对账，避免重复事件和孤儿状态。
+- **会话绑定**：`c2_sessions`、`c2_session_bindings`、`c2_event_cursor`、`c2_events`、`c2_tasks`、`c2_listeners` 持久化到 PostgreSQL；未绑定会话不会出现在 Worker 的 C2 工具面。
+- **只读页面**：`/function/c2` 展示实例健康、会话、监听器、任务摘要、事件和任务/资产绑定；不 iframe 嵌入 Toshell 控制台。
+- **Planner 工具面**：`c2_session_list`、`c2_session_context`、`c2_recon` 以 deferred host tool 加载；Planner 默认 3 个，Worker 仅在任务已有绑定会话时获得同一裁剪面。`c2_recon` 在 Phase 3 只返回白名单动作和现有摘要，不创建 Toshell 任务。
+- **Token 基线**：Planner 只读 3 工具 schema 为 `327` tokens（含 1.3 安全余量 `426`），低于 `2,000` schema 预算；记录见 [`integrations/toshell/contract/phase3_readonly_baseline.json`](integrations/toshell/contract/phase3_readonly_baseline.json)。
+
+验证：`go test ./integrations/toshell/client ./integrations/toshell/contract`、后端编译和 `pnpm exec tsc --noEmit` 通过。Phase 3 不执行 Confirm/Danger 操作；审批式操作和证据物化在 Phase 4 落地。来源包括 Toshell、ARTEX-main、Pojun、artex-ymh、artex-ld、RuoJi6/ARTEX；Toshell 仍为独立 MIT sidecar，未纳入 Ghoul 二进制。
+
+### Phase 4：C2 审批式操作
+
+Phase 4 已把 Toshell Confirm/Danger 操作纳入 Ghoul 的策略、审批和证据链：
+
+- `c2_operations`、`c2_operation_approvals`、`c2_evidence` 记录任务/会话绑定、参数哈希、幂等键、审批快照、Toshell task id、物化证据和 Finding 关联。
+- 策略层校验任务范围、RoE、session binding、工具等级和滑动窗口限流；Confirm/Danger 默认 fail-closed，Danger 需要两阶段审批。
+- 审批令牌使用服务端 HMAC、短 TTL、参数哈希、任务/会话快照绑定；数据库只保存令牌哈希，令牌由已认证审批中心签发并一次性消费。
+- `c2_file_list`、`c2_process_list`、`c2_screenshot`、`c2_tunnel` 为 Confirm 工具；`c2_exec` 为 Danger 工具；读取型 `c2_recon` 可执行但只返回摘要并把输出物化。
+- 输出经过 ANSI/控制字符清理、凭据脱敏、注入边界包装和大小限制；人工操作统一写入 `actor=user`、`source=manual`。
+- `/system/c2/approvals` 提供审批中心，`/function/c2/operations/[id]` 提供操作详情；Toshell 管理台仅通过新窗口链接打开，不使用 iframe。
+
+验证：`go test ./integrations/toshell/approval ./integrations/toshell/policy ./integrations/toshell/sanitize ./integrations/toshell/client ./config`、后端编译和 `pnpm exec tsc --noEmit` 通过。参考项目与 AGPL 来源说明见本文件末尾“参考项目与源码引用”一节。
+
+### Phase 5：高级 C2 与半自主
+
+Phase 5 在 Phase 4 的审批账本上补齐半自主 C2 工作流：
+
+- `c2_recon` 执行白名单只读动作；`c2_exec` 固定 Danger 等级，默认关闭，开启后需要两个审批阶段，且不会自动重试。
+- `c2_tunnel` 支持 list/start/stop，必须显式配置 `c2.allow_tunnel=true`，并继续受任务范围、session binding 和限流约束。
+- `c2-operations` Skill 默认绑定 Worker/Pentest，明确要求先读取绑定会话、再走审批、最后把证据关联到 Finding。
+- 审批中心支持将 C2 物化证据绑定到 Finding；Finding 证据时间线会保留 C2 operation/session 来源、哈希和脱敏状态。
+- Planner 仍只加载 3 个只读工具；Worker 完整 8 工具面实测为 955 estimated tokens（1,242 with safety），低于 2,000 schema 预算，记录见 `integrations/toshell/contract/phase5_autonomous_baseline.json`。
+
+验证：`go test ./integrations/toshell/contract ./integrations/toshell/policy ./integrations/toshell/sanitize` 和 `pnpm exec tsc --noEmit` 通过。Toshell 仍为独立 MIT sidecar，未复制或修改其源码。
+
+### Phase 6：C2 安全收口
+
+Phase 6 对 C2 接入做了发布前加固：
+
+- 网络隔离：默认只允许 loopback sidecar；远程地址必须使用 HTTPS，并显式加入 `c2.allowed_hosts`。HTTP 客户端禁用代理继承，重定向必须留在原 host。
+- 密钥管理：API Key 只接受 `env:NAME` 或 `file:PATH`；文件引用限制大小，Unix 下要求非组/其他用户可读；密钥不会返回浏览器、Agent、日志或操作参数。
+- 双人审批：Danger 固定两阶段审批；令牌短 TTL、参数哈希、任务/session/binding 快照绑定，审批后一次性消费。
+- 故障与注入防护：C2 输出经过控制字符清理、凭据脱敏、不可信内容边界包装和大小上限；危险操作禁止自动重试，操作幂等键防止重复投递。
+- Token 回归：Planner 只读面 327 estimated tokens（426 safety），Worker 8 工具面 955（1,242 safety），均低于 2,000 schema 预算。
+- UI 边界：不嵌入 iframe；Toshell 高级控制台仅使用 `target=_blank` 新窗口链接，审批与证据绑定在 Ghoul 原生页面完成。
+- 安全自检：`GET /api/c2/security` 检查密钥引用、host allowlist、TLS/loopback、审批 TTL、双阶段 Danger 和输出上限。
+
+#### 发布与回滚
+
+1. 发布前备份 Ghoul PostgreSQL，并运行 `go test ./integrations/toshell/... ./config ./db`、`go build ./...`、`pnpm exec tsc --noEmit`。
+2. 默认发布配置保持 `c2.enabled=false`、`c2.allow_confirm=false`、`c2.allow_danger=false`；需要 C2 时再逐项开启。
+3. 回滚只需关闭 `c2.enabled` 停止新的 C2 操作；已提交的 Toshell 任务由 Toshell 继续执行，但 Ghoul 不再自动恢复。
+4. 保留 `c2_operations`、`c2_operation_approvals` 和 `c2_evidence`，不要删除审计链；回滚前备份 Ghoul PostgreSQL，回滚不修改 Toshell 数据库。
 
 ## 开发
 
@@ -352,9 +408,9 @@ server {
 ./dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173) → http://localhost:5173
 ```
 
-- 后端：`go run ./cmd/artex`（不带 `-tags embedui` 则不内嵌前端）
+- 后端：`go run ./cmd/ghoul`（不带 `-tags embedui` 则不内嵌前端）
 - 前端：`cd web && npm run dev`（`/api` 反代到后端，带热更新）
-- 测试：`go test ./...`
+- 测试：`go test ./...`；数据库集成测试请使用独立测试库并通过 `GHOUL_PG_DSN` 指定。
 - Mock 预览（无后端）：`cd web && NEXT_PUBLIC_MOCK=1 npm run dev`
 - 在线 Demo 重新部署（Cloudflare Pages，静态导出 + Mock 数据）：
   ```bash
@@ -366,7 +422,7 @@ server {
 
 ## 系统技术架构
 
-ARTEX 是一套 **LLM 多 agent 驱动的自主渗透系统**：Go 单体后端（内嵌 Next.js 前端）+ PostgreSQL，agent 能力由 [`norma`](https://github.com/Autumn-27/norma) SDK 提供（`agentcore` / `tool` / `permission` / `harness` / `memory` / `transcript`）。核心是**双图架构**，以及围绕它的两条自主性机制：**worker 间过程级信息交换**与 **planner 多轮共享 todolist 稳定攻击链路**。
+Ghoul 是一套 **LLM 多 agent 驱动的自主渗透系统**：Go 单体后端（内嵌 Next.js 前端）+ PostgreSQL，agent 能力由 [`norma`](https://github.com/Autumn-27/norma) SDK 提供（`agentcore` / `tool` / `permission` / `harness` / `memory` / `transcript`）。核心是**双图架构**，以及围绕它的两条自主性机制：**worker 间过程级信息交换**与 **planner 多轮共享 todolist 稳定攻击链路**。
 
 ### 总体分层
 
@@ -530,7 +586,7 @@ flowchart TB
   R3["第 3 轮（②产出 fact）　派意图③"] --> T3
 ```
 
-于是攻击链在“事件驱动 + 无状态会话”的环境下依然**稳定推进、不重复、不错序**——这是 ARTEX 能自主走完多步利用链的关键。
+于是攻击链在“事件驱动 + 无状态会话”的环境下依然**稳定推进、不重复、不错序**——这是 Ghoul 能自主走完多步利用链的关键。
 
 ---
 
@@ -554,7 +610,7 @@ flowchart TB
 
 > ⚠️ **重要提示**：开源协议本身不限制软件的使用用途。以下的「使用限制」与「免责声明」是作者对使用者的额外约定与郑重声明，请务必遵守。
 
-**ARTEX 仅供个人学习、代码研究与本地技术验证使用，不得用于对任何线上系统或网站发起实际测试。**
+**Ghoul 仅供个人学习、代码研究与本地技术验证使用，不得用于对任何线上系统或网站发起实际测试。**
 
 ### 允许使用范围
 
@@ -575,52 +631,6 @@ flowchart TB
 ### 免责声明
 
 本项目按“现状（AS IS）”提供，不附带任何明示或默示的担保。作者及贡献者不对使用本工具（无论使用方式是否得当）所导致的任何直接或间接损失、数据丢失、系统损坏或法律纠纷承担责任。**下载、安装或使用本项目，即表示你已阅读、理解并同意上述全部条款。**
-
----
-
-## C2 审批式操作（Phase 4）
-
-Phase 4 已把 Toshell Confirm/Danger 操作纳入 Ghoul 的策略、审批和证据链：
-
-- `c2_operations`、`c2_operation_approvals`、`c2_evidence` 记录任务/会话绑定、参数哈希、幂等键、审批快照、Toshell task id、物化证据和 Finding 关联。
-- 策略层校验任务范围、RoE、session binding、工具等级和滑动窗口限流；Confirm/Danger 默认 fail-closed，Danger 需要两阶段审批。
-- 审批令牌使用服务端 HMAC、短 TTL、参数哈希、任务/会话快照绑定；数据库只保存令牌哈希，令牌由已认证审批中心签发并一次性消费。
-- `c2_file_list`、`c2_process_list`、`c2_screenshot`、`c2_tunnel` 为 Confirm 工具；`c2_exec` 为 Danger 工具；读取型 `c2_recon` 可执行但只返回摘要并把输出物化。
-- 输出经过 ANSI/控制字符清理、凭据脱敏、注入边界包装和大小限制；人工操作统一写入 `actor=user`、`source=manual`。
-- `/system/c2/approvals` 提供审批中心，`/function/c2/operations/[id]` 提供操作详情；Toshell 管理台仅通过新窗口链接打开，不使用 iframe。
-
-验证：`go test ./integrations/toshell/approval ./integrations/toshell/policy ./integrations/toshell/sanitize ./integrations/toshell/client ./config`、后端编译和 `pnpm exec tsc --noEmit` 通过。参考项目与 AGPL 来源说明见本文件末尾“参考项目与源码引用”一节。
-
-## 高级 C2 与半自主（Phase 5）
-
-Phase 5 在 Phase 4 的审批账本上补齐半自主 C2 工作流：
-
-- `c2_recon` 执行白名单只读动作；`c2_exec` 固定 Danger 等级，默认关闭，开启后需要两个审批阶段，且不会自动重试。
-- `c2_tunnel` 支持 list/start/stop，必须显式配置 `c2.allow_tunnel=true`，并继续受任务范围、session binding 和限流约束。
-- `c2-operations` Skill 默认绑定 Worker/Pentest，明确要求先读取绑定会话、再走审批、最后把证据关联到 Finding。
-- 审批中心支持将 C2 物化证据绑定到 Finding；Finding 证据时间线会保留 C2 operation/session 来源、哈希和脱敏状态。
-- Planner 仍只加载 3 个只读工具；Worker 完整 8 工具面实测为 955 estimated tokens（1,242 with safety），低于 2,000 schema 预算，记录见 `integrations/toshell/contract/phase5_autonomous_baseline.json`。
-
-验证：`go test ./integrations/toshell/contract ./integrations/toshell/policy ./integrations/toshell/sanitize` 和 `pnpm exec tsc --noEmit` 通过。Toshell 仍为独立 MIT sidecar，未复制或修改其源码。
-
-## C2 安全收口（Phase 6）
-
-Phase 6 对 C2 接入做了发布前加固：
-
-- 网络隔离：默认只允许 loopback sidecar；远程地址必须使用 HTTPS，并显式加入 `c2.allowed_hosts`。HTTP 客户端禁用代理继承，重定向必须留在原 host。
-- 密钥管理：API Key 只接受 `env:NAME` 或 `file:PATH`；文件引用限制大小，Unix 下要求非组/其他用户可读；密钥不会返回浏览器、Agent、日志或操作参数。
-- 双人审批：Danger 固定两阶段审批；令牌短 TTL、参数哈希、任务/session/binding 快照绑定，审批后一次性消费。
-- 故障与注入防护：C2 输出经过控制字符清理、凭据脱敏、不可信内容边界包装和大小上限；危险操作禁止自动重试，操作幂等键防止重复投递。
-- Token 回归：Planner 只读面 327 estimated tokens（426 safety），Worker 8 工具面 955（1,242 safety），均低于 2,000 schema 预算。
-- UI 边界：不嵌入 iframe；Toshell 高级控制台仅使用 `target=_blank` 新窗口链接，审批与证据绑定在 Ghoul 原生页面完成。
-- 安全自检：`GET /api/c2/security` 检查密钥引用、host allowlist、TLS/loopback、审批 TTL、双阶段 Danger 和输出上限。
-
-### 发布与回滚
-
-1. 发布前备份 Ghoul PostgreSQL，并运行 `go test ./integrations/toshell/... ./config ./db`、`go build ./...`、`pnpm exec tsc --noEmit`。
-2. 默认发布配置保持 `c2.enabled=false`、`c2.allow_confirm=false`、`c2.allow_danger=false`；需要 C2 时再逐项开启。
-3. 回滚只需关闭 `c2.enabled` 停止新的 C2 操作；已提交的 Toshell 任务由 Toshell 继续执行，但 Ghoul 不再自动恢复。
-4. 保留 `c2_operations`、`c2_operation_approvals` 和 `c2_evidence`，不要删除审计链；回滚前备份 Ghoul PostgreSQL，回滚不修改 Toshell 数据库。
 
 ## 参考项目与来源声明
 

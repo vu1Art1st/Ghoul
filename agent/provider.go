@@ -1,6 +1,5 @@
 // Package agent wires real LLM-driven planner and work agents (on top of the
-// agent-core SDK) to the dual SQLite graph. See docs/ARTEX-架构设计.md
-// §4.3 (planner) and §4.4 (work agent).
+// agent-core SDK) to the PostgreSQL-backed exploration and asset graphs.
 //
 // Provider configuration is read from the environment so the system runs with
 // any Anthropic- or OpenAI-format endpoint. If no key is configured, FromEnv
@@ -20,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/artex/internal/envcompat"
 	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/compaction"
@@ -137,13 +137,16 @@ func compactionConfig(windowTokens int) *compaction.Config {
 
 // FromEnv resolves the LLM provider config:
 //
-//	ARTEX_LLM_PROVIDER = anthropic|openai (default: inferred from keys)
-//	ARTEX_LLM_MODEL    = model id        (default: per provider)
-//	ARTEX_LLM_BASE_URL = endpoint        (optional)
-//	ARTEX_LLM_PROXY    = proxy URL        (optional; http/https/socks5)
+//	GHOUL_LLM_PROVIDER = anthropic|openai (default: inferred from keys)
+//	GHOUL_LLM_MODEL    = model id        (default: per provider)
+//	GHOUL_LLM_BASE_URL = endpoint        (optional)
+//	GHOUL_LLM_PROXY    = proxy URL        (optional; http/https/socks5)
+//	GHOUL_LLM_STREAM   = false/0/off disables streaming
 //	ANTHROPIC_API_KEY / OPENAI_API_KEY         = credentials
+//
+// The legacy ARTEX_LLM_* names remain accepted as fallbacks.
 func FromEnv() (Config, bool) {
-	prov := os.Getenv("ARTEX_LLM_PROVIDER")
+	prov := envcompat.Get("GHOUL_LLM_PROVIDER", "ARTEX_LLM_PROVIDER")
 	anthKey := os.Getenv("ANTHROPIC_API_KEY")
 	oaiKey := os.Getenv("OPENAI_API_KEY")
 
@@ -159,11 +162,11 @@ func FromEnv() (Config, bool) {
 	}
 
 	c := Config{
-		BaseURL: os.Getenv("ARTEX_LLM_BASE_URL"),
-		Model:   os.Getenv("ARTEX_LLM_MODEL"),
-		Proxy:   strings.TrimSpace(os.Getenv("ARTEX_LLM_PROXY")),
-		// 默认流式;ARTEX_LLM_STREAM=false/0/off 显式关闭走非流式。
-		Stream: !isFalsy(os.Getenv("ARTEX_LLM_STREAM")),
+		BaseURL: envcompat.Get("GHOUL_LLM_BASE_URL", "ARTEX_LLM_BASE_URL"),
+		Model:   envcompat.Get("GHOUL_LLM_MODEL", "ARTEX_LLM_MODEL"),
+		Proxy:   strings.TrimSpace(envcompat.Get("GHOUL_LLM_PROXY", "ARTEX_LLM_PROXY")),
+		// 默认流式;GHOUL_LLM_STREAM=false/0/off 显式关闭走非流式。
+		Stream: !isFalsy(envcompat.Get("GHOUL_LLM_STREAM", "ARTEX_LLM_STREAM")),
 	}
 	switch prov {
 	case "openai":

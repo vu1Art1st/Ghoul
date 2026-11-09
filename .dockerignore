@@ -4,6 +4,8 @@ web/.next
 web/out
 server/webui/dist
 /artex
+/ghoul
+/ghoul.exe
 data
 *.db
 transcripts

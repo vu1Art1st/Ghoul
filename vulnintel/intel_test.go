@@ -2,20 +2,20 @@ package vulnintel
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/envcompat"
 )
 
-// testStore mirrors the other packages' testmain pattern: without ARTEX_PG_DSN
+// testStore mirrors the other packages' testmain pattern: without GHOUL_PG_DSN
 // the suite skips (tables live in the shared idempotent schema).
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("ARTEX_PG_DSN")
+	dsn := envcompat.Get("GHOUL_PG_DSN", "ARTEX_PG_DSN")
 	if dsn == "" {
-		t.Skip("requires ARTEX_PG_DSN")
+		t.Skip("requires GHOUL_PG_DSN")
 	}
 	pg, err := db.Open(dsn)
 	if err != nil {

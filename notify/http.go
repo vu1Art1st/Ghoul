@@ -10,10 +10,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Autumn-27/artex/internal/envcompat"
 )
 
 // allowLocalTargets 决定是否允许把消息投递到环回 / 链路本地地址。
@@ -27,14 +28,14 @@ import (
 //
 // 但「本机 SMTP 中继」（127.0.0.1:25 上的 postfix）是自建邮件的常见配置，
 // 一刀切会把人卡住。所以留一个显式逃生口而不是硬编码放行：
-// 设置 ARTEX_NOTIFY_ALLOW_LOCAL=1 即允许。
+// 设置 GHOUL_NOTIFY_ALLOW_LOCAL=1 即允许；ARTEX_NOTIFY_ALLOW_LOCAL 仍作为兼容别名。
 //
 // 导出为 AllowLocalTargetsEnv 是为了让测试能明确地打开它——本包与 server 包的
 // 用例大量使用 127.0.0.1 上的 httptest 假接收端，不打开就全部被守卫拦下。
-const AllowLocalTargetsEnv = "ARTEX_NOTIFY_ALLOW_LOCAL"
+const AllowLocalTargetsEnv = "GHOUL_NOTIFY_ALLOW_LOCAL"
 
 func allowLocalTargets() bool {
-	v := strings.TrimSpace(os.Getenv(AllowLocalTargetsEnv))
+	v := strings.TrimSpace(envcompat.Get(AllowLocalTargetsEnv, "ARTEX_NOTIFY_ALLOW_LOCAL"))
 	return v == "1" || strings.EqualFold(v, "true")
 }
 

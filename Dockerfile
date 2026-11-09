@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 #
 # 多阶段构建：前端静态导出 → Go 单二进制（内嵌前端）→ 运行镜像。
-# 原 Docker Hub 镜像源（autumn27/artex）已失效，本仓库自此支持从纯源码自助构建：
-#   docker compose build        # 或 docker build -t artex:local .
+# Ghoul 支持从纯源码自助构建：
+#   docker compose build        # 或 docker build -t ghoul:local .
 # TARGETARCH 由 buildx 自动注入（amd64/arm64），Go 交叉编译无需 QEMU；
 # 运行层只装工具，编译全部在构建阶段完成。
 # 国内网络可覆盖模块源（默认已对国内友好）：
@@ -30,7 +30,7 @@ RUN go mod download
 COPY . .
 # 前端静态产物从 web 阶段拷入（.dockerignore 已排除宿主 dist，不会冲突）
 COPY --from=web /web/out/ server/webui/dist/
-RUN CGO_ENABLED=0 GOARCH="${TARGETARCH}" go build -tags embedui -trimpath -o /out/artex ./cmd/artex
+RUN CGO_ENABLED=0 GOARCH="${TARGETARCH}" go build -tags embedui -trimpath -o /out/ghoul ./cmd/ghoul
 
 ########## 阶段 3：运行镜像（同原版：工具 + Playwright 预装）##########
 FROM python:3.12-slim-bookworm
@@ -57,12 +57,12 @@ RUN npm install -g @playwright/mcp@latest @playwright/cli@latest playwright@late
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # 构建阶段产出的单二进制（内嵌前端）
-COPY --from=gobuild /out/artex /app/artex
+COPY --from=gobuild /out/ghoul /app/ghoul
 # 守护启动脚本：进程退出后按退出码决定是否重新拉起，页面一键更新靠它完成换装。
-# 它同时负责把 SIGTERM 转发给 artex —— docker stop 只把信号发给 PID 1，
-# 不转发的话 artex 收不到、做不了优雅关闭，10 秒后被 SIGKILL 硬杀。
+# 它同时负责把 SIGTERM 转发给 ghoul —— docker stop 只把信号发给 PID 1，
+# 不转发的话 ghoul 收不到、做不了优雅关闭，10 秒后被 SIGKILL 硬杀。
 COPY start.sh /app/start.sh
-RUN chmod +x /app/artex /app/start.sh
+RUN chmod +x /app/ghoul /app/start.sh
 COPY skills/ /app/skills/
 # data/（SQLite + jwt.key）持久化点
 VOLUME ["/app/data"]

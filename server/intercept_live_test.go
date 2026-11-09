@@ -11,15 +11,16 @@ import (
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/internal/envcompat"
 	"github.com/Autumn-27/norma/llm"
 )
 
 // Opt-in model regression: sends synthetic review inputs only, never executes
 // their commands. Credentials must be supplied outside the checkout.
 func TestLiveContextReview(t *testing.T) {
-	path := os.Getenv("ARTEX_REVIEW_LIVE_CONFIG")
+	path := envcompat.Get("GHOUL_REVIEW_LIVE_CONFIG", "ARTEX_REVIEW_LIVE_CONFIG")
 	if path == "" {
-		t.Skip("set ARTEX_REVIEW_LIVE_CONFIG to an external private model config")
+		t.Skip("set GHOUL_REVIEW_LIVE_CONFIG to an external private model config")
 	}
 	var cfg struct {
 		Judge struct {
