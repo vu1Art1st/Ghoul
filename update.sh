@@ -1,95 +1,167 @@
 #!/usr/bin/env bash
-# Ghoul 更新脚本：① Docker 更新（拉新镜像重建）  ② 本地编译更新（重建二进制）
-# 与 install.sh 对应：install 负责首次落地，update 负责升级到新版本。
-# DB 迁移无需手动执行——ghoul 每次启动都会幂等重跑 schema.sql（含 ADD COLUMN/CREATE
-# INDEX IF NOT EXISTS），所以“重启即迁移”。数据（pgdata 卷、./data、./skills）不受影响。
+# Ghoul 一键更新脚本：拉取最新代码后，默认在本地重建 Docker 镜像并重启服务。
+#
+# 用法：
+#   ./update.sh                 拉取代码 -> 本地构建 Docker 镜像 -> 重启 ghoul
+#   ./update.sh --no-pull       跳过 git pull，使用当前代码构建
+#   ./update.sh --no-build      跳过镜像构建，只重启现有镜像
+#   ./update.sh --local         本地编译 Go 二进制，不更新 Docker
+#   ./update.sh --tag v0.3.3    构建并标记为 ghoul:v0.3.3
+#
+# 数据库 schema 由 ghoul 启动时自动迁移；pgdata、data、skills 都是绑定挂载，
+# 更新脚本不会删除这些持久化数据。
 set -euo pipefail
 cd "$(cd "$(dirname "$0")" && pwd)"
 
 info(){ printf '\033[36m[*]\033[0m %s\n' "$*"; }
 ok(){   printf '\033[32m[+]\033[0m %s\n' "$*"; }
-warn(){ printf '\033[33m[!]\033[0m %s\n' "$*"; }
+warn(){ printf '\033[33m[!]\033[0m %s\n' "$*" >&2; }
 die(){  printf '\033[31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
-ask(){  local p="$1" d="${2:-}" a; read -rp "$p${d:+ [$d]}: " a; echo "${a:-$d}"; }
+
 env_file_get(){
   local key="$1"
   [ -f .env ] || return 0
-  awk -F= -v key="$key" '$1 == key { v = substr($0, length(key) + 2) } END { if (v != "") print v }' .env
+  awk -F= -v key="$key" '$1 == key { v = substr($0, length(key) + 2) } END { if (v != "") print v }' .env | tr -d '\r'
 }
 
-# ── 可选：同步仓库到最新代码（compose/脚本/本地编译源码都靠它更新）───────
+set_env_value(){
+  local key="$1" value="$2" tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ghoul-env.XXXXXX")"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { found = 0 }
+    index($0, key "=") == 1 { print key "=" value; found = 1; next }
+    { print }
+    END { if (!found) print key "=" value }
+  ' .env >"$tmp"
+  mv "$tmp" .env
+}
+
+usage(){
+  cat <<'EOF'
+用法：
+  ./update.sh [选项]
+
+选项：
+  --docker       更新 Docker 部署（默认）
+  --local        本地编译 Go 二进制
+  --no-pull      跳过 git pull --ff-only
+  --no-build     跳过 docker compose build，只重启服务
+  --tag TAG      设置 GHOUL_TAG，构建为 ghoul:TAG
+  -h, --help     显示帮助
+EOF
+}
+
 sync_repo(){
-  [ -d .git ] && command -v git >/dev/null 2>&1 || { warn "非 git 工作副本，跳过 git pull"; return; }
-  [ "$(ask '拉取最新代码 (git pull --ff-only)? (y/n)' y)" = y ] || return
-  if ! git pull --ff-only; then
-    warn "git pull 未能快进（本地有改动或分支分叉）——请手动处理后重试，本次沿用当前代码"
+  if ! command -v git >/dev/null 2>&1; then
+    warn "未检测到 git，跳过代码拉取，使用当前文件"
+    return
   fi
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "当前目录不是 git 仓库，跳过代码拉取"
+    return
+  fi
+
+  local old_commit new_commit
+  old_commit="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  info "拉取最新代码：git pull --ff-only"
+  if ! git pull --ff-only; then
+    die "git pull 失败。请先处理本地改动或分支冲突；只想用当前代码构建时执行 ./update.sh --no-pull"
+  fi
+  new_commit="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  ok "代码已更新：${old_commit:-unknown} -> ${new_commit:-unknown}"
 }
 
-# ── ① Docker 更新 ───────────────────────────────
 update_docker(){
   command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \
-    || die "未检测到 docker / docker compose，请先用 ./install.sh 安装部署"
-  [ -f .env ] || die "未找到 .env，请先运行 ./install.sh 完成首次部署"
+    || die "未检测到 docker / docker compose，请先完成 Docker 安装"
+  [ -f .env ] || die "未找到 .env，请先执行 ./install.sh 完成首次部署"
 
-  # 可选：升级到指定版本 tag（GHOUL_TAG 优先，旧 ARTEX_TAG 继续兼容）
-  local current_tag tag
-  current_tag="$(env_file_get GHOUL_TAG)"
-  [ -n "$current_tag" ] || current_tag="$(env_file_get ARTEX_TAG)"
-  tag="$(ask "目标镜像 tag（回车沿用 ${current_tag:-latest}）" '')"
-  if [ -n "$tag" ]; then
-    if grep -q '^GHOUL_TAG=' .env; then
-      sed -i.bak "s|^GHOUL_TAG=.*|GHOUL_TAG=${tag}|" .env && rm -f .env.bak
-    elif grep -q '^ARTEX_TAG=' .env; then
-      sed -i.bak "s|^ARTEX_TAG=.*|GHOUL_TAG=${tag}|" .env && rm -f .env.bak
-    else
-      printf '\nGHOUL_TAG=%s\n' "$tag" >> .env
-    fi
-    ok "已将 GHOUL_TAG 设为 ${tag}"
+  local image_repo image_tag
+  if [ -n "${TAG:-}" ]; then
+    case "$TAG" in
+      *[!A-Za-z0-9._-]*) die "无效镜像 tag：$TAG" ;;
+    esac
+    set_env_value GHOUL_TAG "$TAG"
+    ok "已设置 GHOUL_TAG=$TAG"
   fi
 
-  # 只动 ghoul：postgres 是固定的 16-alpine，不需要跟着升级（拉它纯属浪费带宽，
-  # 且大版本变动还会有兼容风险）。ghoul 声明了 depends_on postgres，所以带服务名
-  # up 时若 pg 没起会自动拉起，已在跑的则原样保留、不重建。
-  info "拉取新镜像（仅 ghoul）…"
-  if ! docker compose pull ghoul; then
-    warn "镜像拉取失败，尝试从源码构建 ghoul 镜像"
+  image_repo="$(env_file_get GHOUL_IMAGE)"
+  image_repo="${image_repo:-ghoul}"
+  image_tag="$(env_file_get GHOUL_TAG)"
+  [ -n "$image_tag" ] || image_tag="$(env_file_get ARTEX_TAG)"
+  image_tag="${image_tag:-local}"
+
+  if [ "${DO_BUILD}" -eq 1 ]; then
+    info "本地构建镜像：${image_repo}:${image_tag}"
     docker compose build ghoul
+  else
+    warn "跳过镜像构建，直接使用现有 ${image_repo}:${image_tag}"
   fi
-  info "重建并启动（ghoul 重启时自动迁移 schema）…"
+
+  info "重启 ghoul（启动时自动迁移 schema）"
   docker compose up -d ghoul
-  ok "更新完成 → http://localhost:8787"
+  ok "更新完成 -> http://localhost:8787"
   info "查看日志：docker compose logs -f ghoul"
-  info "清理旧镜像（可选）：docker image prune -f"
 }
 
-# ── ② 本地编译更新 ──────────────────────────────
 update_local(){
   command -v go >/dev/null 2>&1 || die "未检测到 Go（>=1.26）：https://go.dev/dl/"
-  [ -f config.json ] || warn "未找到 config.json——若首次部署请改用 ./install.sh"
+  [ -f config.json ] || warn "未找到 config.json，请先执行 ./install.sh 完成首次配置"
   ok "Go: $(go version)"
 
   if command -v npm >/dev/null 2>&1; then
-    info "重建前端静态产物…"
-    ( cd web && npm ci && npm run build:static )
-    rm -rf server/webui/dist && cp -r web/out server/webui/dist
-    info "重新编译内嵌单二进制…"
+    info "重建前端静态产物"
+    (cd web && npm ci && npm run build:static)
+    rm -rf server/webui/dist
+    cp -r web/out server/webui/dist
+    info "编译内嵌前端的 Go 二进制"
     CGO_ENABLED=0 go build -tags embedui -trimpath -o ghoul ./cmd/ghoul
   else
-    warn "未检测到 npm：编译**不内嵌前端**的后端（前端需另跑 npm run dev）"
+    warn "未检测到 npm，将编译不含内嵌前端的二进制"
     CGO_ENABLED=0 go build -o ghoul ./cmd/ghoul
   fi
-  ok "编译完成 → ./ghoul"
-  warn "请通过 ./start.sh 重启正在运行的 ghoul 进程以生效（重启时会自动迁移 schema）"
+
+  ok "编译完成：./ghoul"
+  warn "通过 ./start.sh 重启进程后生效；容器内进程不会被本地编译覆盖"
 }
+
+MODE=docker
+DO_PULL=1
+DO_BUILD=1
+TAG=
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --docker) MODE=docker; shift ;;
+    --local) MODE=local; shift ;;
+    --no-pull) DO_PULL=0; shift ;;
+    --no-build) DO_BUILD=0; shift ;;
+    --tag)
+      [ "$#" -ge 2 ] || die "--tag 需要镜像标签"
+      TAG="$2"
+      shift 2
+      ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "未知参数：$1（使用 --help 查看用法）" ;;
+  esac
+done
+
+[ "$MODE" = docker ] || [ "$DO_BUILD" -eq 1 ] || die "--no-build 仅适用于 Docker 更新"
+[ "$MODE" = docker ] || [ -z "$TAG" ] || die "--tag 仅适用于 Docker 更新"
 
 echo "=============================="
 echo "  GHOUL 更新"
-echo "  1) Docker 更新（拉新镜像重建）"
-echo "  2) 本地更新（go 重新编译）"
+echo "  模式：$MODE"
 echo "=============================="
-case "$(ask '选择' 1)" in
-  1) sync_repo; update_docker ;;
-  2) sync_repo; update_local ;;
-  *) die "无效选择" ;;
+
+if [ "$DO_PULL" -eq 1 ]; then
+  sync_repo
+else
+  warn "已跳过代码拉取，使用当前工作区代码"
+fi
+
+case "$MODE" in
+  docker) update_docker ;;
+  local) update_local ;;
+  *) die "无效更新模式：$MODE" ;;
 esac

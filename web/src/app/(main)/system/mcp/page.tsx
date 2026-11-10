@@ -32,6 +32,7 @@ type FormState = {
   url: string;
   env: string;
   insecure: boolean;
+  toolAllowlist: string;
 };
 const emptyForm: FormState = {
   name: "",
@@ -41,6 +42,7 @@ const emptyForm: FormState = {
   url: "",
   env: "",
   insecure: false,
+  toolAllowlist: "",
 };
 
 export default function MCPPage() {
@@ -117,6 +119,7 @@ export default function MCPPage() {
       url: s.url ?? "",
       env: envToText(s.env),
       insecure: s.insecure ?? false,
+      toolAllowlist: (s.tool_allowlist ?? []).join(", "),
     });
     setTab("config");
     setOpen(true);
@@ -158,6 +161,10 @@ export default function MCPPage() {
               args: [] as string[],
               env: parseEnv(form.env), // 远程模式下 env 即请求头
               insecure: form.insecure,
+              tool_allowlist: form.toolAllowlist
+                .split(/[,\s]+/)
+                .map((v) => v.trim())
+                .filter(Boolean),
             }
           : {
               transport: "stdio" as const,
@@ -165,6 +172,10 @@ export default function MCPPage() {
               args: form.args.trim() ? form.args.trim().split(/\s+/) : [],
               env: parseEnv(form.env),
               insecure: false,
+              tool_allowlist: form.toolAllowlist
+                .split(/[,\s]+/)
+                .map((v) => v.trim())
+                .filter(Boolean),
             };
       await api.saveMcpServer({
         ...(editing ? { id: editing.id } : {}),
@@ -322,6 +333,16 @@ export default function MCPPage() {
             }
             value={form.env}
             onChange={(e) => setF({ env: e.target.value })}
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="m-allowlist">工具白名单（逗号分隔，留空表示不过滤）</Label>
+          <Input
+            id="m-allowlist"
+            className="font-mono"
+            placeholder="session_list, session_context, task_result"
+            value={form.toolAllowlist}
+            onChange={(e) => setF({ toolAllowlist: e.target.value })}
           />
         </div>
       </div>

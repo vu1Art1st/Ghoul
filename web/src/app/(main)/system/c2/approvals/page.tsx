@@ -24,7 +24,9 @@ export default function C2ApprovalsPage() {
           审批 Confirm/Danger 操作，核对参数哈希、任务范围和会话快照；执行结果会自动物化为 Ghoul 证据。
         </p>
       </div>
-      <C2ApprovalCenter baseURL={status?.instance?.base_url} />
+      <C2ApprovalCenter
+        baseURL={status?.console_url || status?.mcp?.console_url || status?.instance?.base_url}
+      />
     </div>
   );
 }

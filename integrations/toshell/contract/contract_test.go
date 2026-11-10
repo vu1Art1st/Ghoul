@@ -136,7 +136,7 @@ func TestGhoulToolSurfaceContract(t *testing.T) {
 	if surface.Version != 1 {
 		t.Fatalf("surface.version = %d, want 1", surface.Version)
 	}
-	if surface.MaxTools != 8 || len(surface.Tools) > surface.MaxTools {
+	if surface.MaxTools != 10 || len(surface.Tools) > surface.MaxTools {
 		t.Fatalf("surface size = %d, max = %d", len(surface.Tools), surface.MaxTools)
 	}
 	if len(surface.PlannerDefault) != 3 {

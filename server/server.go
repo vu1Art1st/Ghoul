@@ -21,10 +21,12 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/hosttools"
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/artex/llmpool"
 	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/artex/report"
+	"github.com/Autumn-27/artex/shared"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/llm"
 	actool "github.com/Autumn-27/norma/tool"
@@ -48,6 +50,9 @@ type Server struct {
 	basicAuth basicAuthGate
 	vulnIntel *vulnIntelService
 	c2        *c2Service
+	shared    *shared.Service
+	installer *hosttools.Installer
+	jobs      hosttools.JobRunner
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -155,6 +160,22 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
 	s.initSideQuestions()
+	if sharedSvc, err := shared.New(dataDir, m.pg); err != nil {
+		log.Printf("[shared] disabled: %v", err)
+	} else {
+		s.shared = sharedSvc
+		s.installer = hosttools.NewInstaller(ctx, m.pg, sharedSvc, s.installProxy)
+		s.jobs = s.installer
+		remote := hosttools.RemoteFromEnv(s.installProxy)
+		if remote != nil {
+			s.jobs = remote
+		}
+		if remote == nil {
+			if err := m.pg.RecoverHostInstallJobs(ctx); err != nil {
+				log.Printf("[hostenv] recover jobs: %v", err)
+			}
+		}
+	}
 	if m.pg != nil {
 		if err := s.basicAuth.load(m.pg); err != nil {
 			log.Printf("[auth] HTTP Basic Auth 配置加载失败，已保持关闭: %v", err)
@@ -236,6 +257,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		domainReg := buildDomainReg(m.Assets())
 		wireTools(m.pg, domainReg) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
 		s.seedC2Tools()
+		s.seedToshellMCP()
 		seedPrompts(m.pg)          // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
 		s.seedOrchestrationTools() // P2 跨任务编排工具 seed 进 tools 表(可按 agent 绑定)
 		if err := m.pg.RecoverInterruptedFindingMergeJobs(ctx); err != nil {
@@ -739,6 +761,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/workspace/delete", s.wsDelete)
 	mux.HandleFunc("GET /api/workspace/download", s.wsDownload)
 	mux.HandleFunc("POST /api/workspace/upload", s.wsUpload)
+	// Host environment inventory/install jobs and the reviewed shared-artifact catalog.
+	mux.HandleFunc("GET /api/hostenv/status", s.hostenvStatus)
+	mux.HandleFunc("POST /api/hostenv/install", s.hostenvInstall)
+	mux.HandleFunc("POST /api/hostenv/install-batch", s.hostenvInstallBatch)
+	mux.HandleFunc("GET /api/hostenv/jobs", s.hostenvJobs)
+	mux.HandleFunc("GET /api/hostenv/jobs/{id}", s.hostenvJob)
+	mux.HandleFunc("POST /api/hostenv/jobs/{id}/cancel", s.hostenvCancel)
+	mux.HandleFunc("PUT /api/hostenv/proxy", s.hostenvProxy)
+	mux.HandleFunc("POST /api/hostenv/proxy-check", s.hostenvProxyCheck)
+	mux.HandleFunc("GET /api/shared/assets", s.sharedList)
+	mux.HandleFunc("POST /api/shared/assets", s.sharedPublish)
+	mux.HandleFunc("GET /api/shared/assets/{id}", s.sharedGet)
+	mux.HandleFunc("POST /api/shared/assets/{id}/status", s.sharedStatus)
+	mux.HandleFunc("GET /api/shared/packages", s.sharedPackages)
+	mux.HandleFunc("POST /api/shared/packages/install", s.sharedPackageInstall)
+	mux.HandleFunc("DELETE /api/shared/packages", s.sharedPackageRemove)
 	mux.HandleFunc("GET /api/tasks/{id}/scope", s.taskScopeList)
 	mux.HandleFunc("POST /api/tasks/{id}/scope", s.taskScopeAdd)
 	mux.HandleFunc("DELETE /api/tasks/{id}/scope/{sid}", s.taskScopeDelete)

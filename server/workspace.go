@@ -28,13 +28,27 @@ const (
 // rooted copy collapses any ".." so nothing can climb above the root.
 func (s *Server) wsResolve(rel string) (string, bool) {
 	base := filepath.Clean(s.m.dir)
+	if resolved, err := filepath.EvalSymlinks(base); err == nil {
+		base = resolved
+	}
 	rel = strings.TrimPrefix(strings.TrimSpace(rel), "/")
 	clean := filepath.Clean("/" + rel) // e.g. "/a/../../etc" → "/etc" (still rooted at "/")
 	abs := filepath.Clean(filepath.Join(base, clean))
 	if abs != base && !strings.HasPrefix(abs, base+string(os.PathSeparator)) {
 		return "", false
 	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		if resolved != base && !strings.HasPrefix(resolved, base+string(os.PathSeparator)) {
+			return "", false
+		}
+	}
 	return abs, true
+}
+
+func (s *Server) wsWritable(abs string) bool {
+	sharedRoot := filepath.Join(filepath.Clean(s.m.dir), "shared")
+	clean := filepath.Clean(abs)
+	return clean != sharedRoot && !strings.HasPrefix(clean, sharedRoot+string(os.PathSeparator))
 }
 
 // wsRel renders an absolute path back as a workspace-relative path (forward slashes).
@@ -144,7 +158,7 @@ func (s *Server) wsWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	abs, ok := s.wsResolve(req.Path)
-	if !ok || abs == filepath.Clean(s.m.dir) {
+	if !ok || abs == filepath.Clean(s.m.dir) || !s.wsWritable(abs) {
 		writeErr(w, 400, "非法路径")
 		return
 	}
@@ -173,7 +187,7 @@ func (s *Server) wsMkdir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	abs, ok := s.wsResolve(req.Path)
-	if !ok || abs == filepath.Clean(s.m.dir) {
+	if !ok || abs == filepath.Clean(s.m.dir) || !s.wsWritable(abs) {
 		writeErr(w, 400, "非法路径")
 		return
 	}
@@ -194,6 +208,10 @@ func (s *Server) wsDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if abs == filepath.Clean(s.m.dir) {
 		writeErr(w, 400, "不能删除工作区根目录")
+		return
+	}
+	if !s.wsWritable(abs) {
+		writeErr(w, 403, "共享空间为只读，请使用专用发布接口")
 		return
 	}
 	if _, err := os.Stat(abs); err != nil {
@@ -228,7 +246,7 @@ func (s *Server) wsDownload(w http.ResponseWriter, r *http.Request) {
 // POST /api/workspace/upload?path=<dir> — multipart form field "file" (one or more).
 func (s *Server) wsUpload(w http.ResponseWriter, r *http.Request) {
 	dirAbs, ok := s.wsResolve(r.URL.Query().Get("path"))
-	if !ok {
+	if !ok || !s.wsWritable(dirAbs) {
 		writeErr(w, 400, "非法路径")
 		return
 	}

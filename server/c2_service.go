@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -20,14 +21,17 @@ type c2Service struct {
 	cfg    config.C2Config
 	client *toshellclient.Client
 
-	instanceID int64
-	secret     []byte
-	mu         sync.Mutex
-	lastError  string
-	lastSync   time.Time
-	rateMu     sync.Mutex
-	rate       map[int64][]time.Time
+	instanceID  int64
+	secret      []byte
+	mu          sync.Mutex
+	syncError   string
+	streamError string
+	lastSync    time.Time
+	rateMu      sync.Mutex
+	rate        map[int64][]time.Time
 }
+
+const c2FailureThreshold = 3
 
 func newC2Service(pg *db.DB, secret []byte) *c2Service {
 	cfg := config.Load().EffectiveC2()
@@ -41,13 +45,21 @@ func (s *c2Service) start(ctx context.Context) {
 	if s == nil {
 		return
 	}
+	version := strings.TrimSpace(os.Getenv("TOSHELL_VERSION"))
+	if version == "" {
+		version = "v1.4.3"
+	}
+	commit := strings.TrimSpace(os.Getenv("TOSHELL_COMMIT"))
+	if commit == "" {
+		commit = "8bf4643c1affbe109993123475422f6d26897903"
+	}
 	instanceID, err := s.pg.UpsertC2Instance(ctx, db.C2Instance{
 		Name: "toshell", BaseURL: s.cfg.BaseURL, APIKeyRef: s.cfg.APIKeyRef,
-		Version: "v1.4.3", Commit: "8bf4643c1affbe109993123475422f6d26897903",
+		Version: version, Commit: commit,
 		Enabled: true, Status: "connecting",
 	})
 	if err != nil {
-		s.setError(err)
+		s.setSyncError(err)
 		log.Printf("[c2] register instance: %v", err)
 		return
 	}
@@ -58,7 +70,7 @@ func (s *c2Service) start(ctx context.Context) {
 		TLSCAFile: s.cfg.TLSCAFile,
 	})
 	if err != nil {
-		s.setError(err)
+		s.setSyncError(err)
 		_ = s.pg.UpdateC2InstanceHealth(ctx, instanceID, "error", json.RawMessage(`{}`), json.RawMessage(`{}`))
 		log.Printf("[c2] init client: %v", err)
 		return
@@ -74,9 +86,13 @@ func (s *c2Service) run(ctx context.Context) {
 		return
 	case <-time.After(2 * time.Second):
 	}
+	syncFailures := 0
 	if err := s.syncOnce(ctx); err != nil {
-		s.setError(err)
+		syncFailures++
+		s.recordSyncFailure(ctx, err, syncFailures)
 		log.Printf("[c2] initial sync: %v", err)
+	} else {
+		syncFailures = 0
 	}
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -86,8 +102,11 @@ func (s *c2Service) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := s.syncOnce(ctx); err != nil {
-				s.setError(err)
+				syncFailures++
+				s.recordSyncFailure(ctx, err, syncFailures)
 				log.Printf("[c2] reconcile: %v", err)
+			} else {
+				syncFailures = 0
 			}
 		}
 	}
@@ -156,9 +175,9 @@ func (s *c2Service) syncOnce(ctx context.Context) error {
 			return err
 		}
 	}
-	_ = s.pg.SetC2Cursor(qctx, s.instanceID, "", time.Time{}, true, "connected")
+	_ = s.pg.MarkC2Resync(qctx, s.instanceID)
 	s.mu.Lock()
-	s.lastError = ""
+	s.syncError = ""
 	s.lastSync = time.Now().UTC()
 	s.mu.Unlock()
 	return nil
@@ -166,14 +185,19 @@ func (s *c2Service) syncOnce(ctx context.Context) error {
 
 func (s *c2Service) wsLoop(ctx context.Context) {
 	backoff := 2 * time.Second
+	failures := 0
 	for {
 		if ctx.Err() != nil || s.client == nil {
 			return
 		}
-		if err := s.wsOnce(ctx); err != nil {
-			s.setError(err)
-			_ = s.pg.SetC2Cursor(context.Background(), s.instanceID, "", time.Time{}, false, "disconnected")
-			_ = s.syncOnce(ctx)
+		connected, err := s.wsOnce(ctx)
+		if connected {
+			failures = 0
+			backoff = 2 * time.Second
+		}
+		if err != nil {
+			failures++
+			s.recordStreamFailure(ctx, err, failures)
 			log.Printf("[c2] event stream: %v", err)
 		}
 		select {
@@ -187,21 +211,22 @@ func (s *c2Service) wsLoop(ctx context.Context) {
 	}
 }
 
-func (s *c2Service) wsOnce(ctx context.Context) error {
+func (s *c2Service) wsOnce(ctx context.Context) (bool, error) {
 	wsURL, err := s.client.EventsURL()
 	if err != nil {
-		return err
+		return false, err
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, s.client.AuthHeaders())
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer conn.Close()
-	_ = s.pg.SetC2Cursor(ctx, s.instanceID, "", time.Time{}, false, "connected")
+	s.clearStreamError()
+	_ = s.pg.SetC2Cursor(ctx, s.instanceID, "", time.Time{}, "connected")
 	for {
 		var event toshellclient.Event
 		if err := conn.ReadJSON(&event); err != nil {
-			return err
+			return true, err
 		}
 		eventAt := time.Unix(event.Time, 0).UTC()
 		if event.Time == 0 {
@@ -209,10 +234,10 @@ func (s *c2Service) wsOnce(ctx context.Context) error {
 		}
 		item, err := s.pg.AppendC2Event(ctx, s.instanceID, event.Type, eventAt, event.Payload)
 		if err != nil {
-			return err
+			return true, err
 		}
 		s.applyEvent(ctx, event)
-		_ = s.pg.SetC2Cursor(ctx, s.instanceID, item.EventKey, eventAt, false, "connected")
+		_ = s.pg.SetC2Cursor(ctx, s.instanceID, item.EventKey, eventAt, "connected")
 	}
 }
 
@@ -269,13 +294,55 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (s *c2Service) setError(err error) {
+func (s *c2Service) setSyncError(err error) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	s.lastError = err.Error()
+	s.syncError = err.Error()
 	s.mu.Unlock()
+}
+
+func (s *c2Service) setStreamError(err error) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.streamError = err.Error()
+	s.mu.Unlock()
+}
+
+func (s *c2Service) clearStreamError() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.streamError = ""
+	s.mu.Unlock()
+}
+
+func (s *c2Service) recordSyncFailure(ctx context.Context, err error, failures int) {
+	status := "reconnecting"
+	if failures >= c2FailureThreshold {
+		status = "error"
+		s.setSyncError(err)
+	} else {
+		s.mu.Lock()
+		s.syncError = ""
+		s.mu.Unlock()
+	}
+	_ = s.pg.UpdateC2InstanceStatus(ctx, s.instanceID, status)
+}
+
+func (s *c2Service) recordStreamFailure(ctx context.Context, err error, failures int) {
+	status := "reconnecting"
+	if failures >= c2FailureThreshold {
+		status = "error"
+		s.setStreamError(err)
+	} else {
+		s.clearStreamError()
+	}
+	_ = s.pg.SetC2Cursor(context.Background(), s.instanceID, "", time.Time{}, status)
 }
 
 func (s *c2Service) state() (lastError string, lastSync time.Time) {
@@ -284,7 +351,10 @@ func (s *c2Service) state() (lastError string, lastSync time.Time) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.lastError, s.lastSync
+	if s.syncError != "" {
+		return s.syncError, s.lastSync
+	}
+	return s.streamError, s.lastSync
 }
 
 func (s *c2Service) enabled() bool { return s != nil && s.client != nil }

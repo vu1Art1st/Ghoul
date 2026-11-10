@@ -2,6 +2,11 @@
 /data/
 /pgdata/
 /migration-backups/
+/toshell/configs/server.yaml
+/toshell/data/
+/toshell/implants/
+/toshell/logs/
+/toshell/plugins/
 *.db
 *.db-wal
 *.db-shm

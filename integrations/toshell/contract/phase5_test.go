@@ -27,8 +27,8 @@ func TestPhase5AutonomousSurfaceBudget(t *testing.T) {
 	}
 	t.Logf("phase5 worker surface: tools=%d bytes=%d tokens=%d safety=%d",
 		measurement.ToolCount, measurement.JSONBytes, measurement.EstimatedTokens, measurement.EstimatedTokensWithSafety)
-	if measurement.ToolCount != 8 {
-		t.Fatalf("C2 tool surface = %d, want 8", measurement.ToolCount)
+	if measurement.ToolCount != 10 {
+		t.Fatalf("C2 tool surface = %d, want 10", measurement.ToolCount)
 	}
 	if measurement.EstimatedTokensWithSafety > surface.SchemaBudget {
 		t.Fatalf("C2 tool surface exceeds schema budget: %+v", measurement)

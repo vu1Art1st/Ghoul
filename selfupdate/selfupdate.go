@@ -161,7 +161,7 @@ func parseVersion(s string) ([3]int, bool) {
 
 // InDocker 报告进程是否跑在容器里。Docker 下换装写的是容器可写层，
 // `docker compose up -d` 重建容器会退回镜像自带的版本——这是预期行为
-// （那时用户本来就在拉新镜像），但前端要能据此把话说清楚。
+// （那时用户本来就在重建镜像），但前端要能据此把话说清楚。
 func InDocker() bool {
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return true

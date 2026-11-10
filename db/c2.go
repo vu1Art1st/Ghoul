@@ -164,6 +164,13 @@ func (d *DB) UpdateC2InstanceHealth(ctx context.Context, id int64, status string
 	return err
 }
 
+func (d *DB) UpdateC2InstanceStatus(ctx context.Context, id int64, status string) error {
+	_, err := d.ExecContext(ctx, `UPDATE c2_instances
+		SET status=$2,updated_at=now()
+		WHERE id=$1`, id, status)
+	return err
+}
+
 func (d *DB) ListC2Instances(ctx context.Context) ([]C2Instance, error) {
 	rows, err := d.QueryContext(ctx, `SELECT id,name,base_url,mcp_url,version,commit,api_key_ref,
 		enabled,status,last_health_at,last_sync_at,health_json,channels_json,created_at,updated_at
@@ -588,22 +595,25 @@ func (d *DB) ListC2Events(ctx context.Context, instanceID int64, limit int) ([]C
 	return out, rows.Err()
 }
 
-func (d *DB) SetC2Cursor(ctx context.Context, instanceID int64, lastEventID string, lastEventAt time.Time, resync bool, status string) error {
-	var resyncAt any
-	if resync {
-		resyncAt = time.Now().UTC()
-	}
+func (d *DB) SetC2Cursor(ctx context.Context, instanceID int64, lastEventID string, lastEventAt time.Time, status string) error {
 	var eventAt any
 	if !lastEventAt.IsZero() {
 		eventAt = lastEventAt
 	}
-	_, err := d.ExecContext(ctx, `INSERT INTO c2_event_cursor(instance_id,last_event_id,last_event_at,last_resync_at,status)
-		VALUES($1,$2,$3,$4,$5)
+	_, err := d.ExecContext(ctx, `INSERT INTO c2_event_cursor(instance_id,last_event_id,last_event_at,status)
+		VALUES($1,$2,$3,$4)
 		ON CONFLICT(instance_id) DO UPDATE SET
 		  last_event_id=COALESCE(NULLIF(EXCLUDED.last_event_id,''),c2_event_cursor.last_event_id),
 		  last_event_at=COALESCE(EXCLUDED.last_event_at,c2_event_cursor.last_event_at),
-		  last_resync_at=COALESCE(EXCLUDED.last_resync_at,c2_event_cursor.last_resync_at),
-		  status=EXCLUDED.status`, instanceID, lastEventID, eventAt, resyncAt, status)
+		  status=EXCLUDED.status`, instanceID, lastEventID, eventAt, status)
+	return err
+}
+
+func (d *DB) MarkC2Resync(ctx context.Context, instanceID int64) error {
+	_, err := d.ExecContext(ctx, `INSERT INTO c2_event_cursor(instance_id,last_resync_at,status)
+		VALUES($1,now(),'disconnected')
+		ON CONFLICT(instance_id) DO UPDATE SET last_resync_at=EXCLUDED.last_resync_at`,
+		instanceID)
 	return err
 }
 

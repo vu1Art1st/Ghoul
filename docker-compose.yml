@@ -14,10 +14,69 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Generates the sidecar's high-entropy secrets once and stores them in a named
+  # volume shared with Toshell and Ghoul. No secret is committed to the repo.
+  toshell-bootstrap:
+    image: alpine:3.20
+    volumes:
+      - toshell_secrets:/run/secrets
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        mkdir -p /run/secrets
+        gen() {
+          path="$$1"
+          if [ ! -s "$$path" ]; then
+            head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$$path"
+          fi
+          chmod 600 "$$path"
+        }
+        gen /run/secrets/toshell_api_key
+        gen /run/secrets/toshell_mcp_token
+        gen /run/secrets/toshell_admin_password
+        gen /run/secrets/toshell_secret_revision
+    restart: "no"
+
+  # C2 kernel and advanced console. Ghoul connects to its REST/WS API and to the
+  # read-only MCP surface; the browser talks to Ghoul, not to this token.
+  toshell:
+    image: mianhuatang11/ghoul-toshell:${TOSHELL_VERSION:-v1.4.3}
+    build:
+      context: .
+      dockerfile: Dockerfile.toshell
+      args:
+        TOSHELL_VERSION: ${TOSHELL_VERSION:-v1.4.3}
+        TOSHELL_RELEASE_BASE: ${TOSHELL_RELEASE_BASE:-https://github.com/iQingshan/Toshell/releases/download}
+    depends_on:
+      toshell-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      TOSHELL_PUBLIC_HOST: ${TOSHELL_PUBLIC_HOST:-127.0.0.1}
+      TOSHELL_ADMIN_USERNAME: ${TOSHELL_ADMIN_USERNAME:-admin}
+    volumes:
+      - toshell_secrets:/run/secrets:ro
+      - ./toshell/configs:/opt/toshell/configs
+      - ./toshell/data:/opt/toshell/data
+      - ./toshell/implants:/opt/toshell/implants
+      - ./toshell/plugins:/opt/toshell/plugins
+      - ./toshell/logs:/opt/toshell/logs
+    ports:
+      - "127.0.0.1:18081:18081"
+      - "${TOSHELL_LISTENER_BIND:-127.0.0.1}:${TOSHELL_LISTENER_PORT:-8080}:8080"
+      - "${TOSHELL_PAYLOAD_BIND:-127.0.0.1}:${TOSHELL_PAYLOAD_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18081/api/v1/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   # Host-network SOCKS5 bridge for services bound to the host loopback.
   # It is intentionally limited to loopback targets and Docker/loopback sources.
   host-loopback-proxy:
-    image: mianhuatang11/ghoul:${GHOUL_TAG:-${ARTEX_TAG:-latest}}
+    image: ${GHOUL_IMAGE:-ghoul}:${GHOUL_TAG:-${ARTEX_TAG:-local}}
     network_mode: host
     entrypoint: ["/app/hostproxy"]
     environment:
@@ -37,15 +96,18 @@ services:
     restart: unless-stopped
 
   ghoul:
-    # 镜像源由本仓库自维护。
-    # 正常部署直接拉取本镜像；拉取失败（或想改代码）时本地构建：
+    # 默认使用本地构建的 ghoul:local，不依赖外部镜像仓库账号。
+    # 首次安装或更新时从源码构建：
     #   docker compose build
-    image: mianhuatang11/ghoul:${GHOUL_TAG:-${ARTEX_TAG:-latest}}
+    # 如需使用已发布的镜像，可在 .env 设置 GHOUL_IMAGE 和 GHOUL_TAG。
+    image: ${GHOUL_IMAGE:-ghoul}:${GHOUL_TAG:-${ARTEX_TAG:-local}}
     build:
       context: .
       dockerfile: Dockerfile
     depends_on:
       postgres:
+        condition: service_healthy
+      toshell:
         condition: service_healthy
       host-loopback-proxy:
         condition: service_healthy
@@ -63,10 +125,24 @@ services:
       GHOUL_NOTIFY_ALLOW_LOCAL: ${GHOUL_NOTIFY_ALLOW_LOCAL:-${ARTEX_NOTIFY_ALLOW_LOCAL:-}}
       GHOUL_BTW_MAX_OUTPUT_TOKENS: ${GHOUL_BTW_MAX_OUTPUT_TOKENS:-${ARTEX_BTW_MAX_OUTPUT_TOKENS:-}}
       TOSHELL_API_KEY: ${TOSHELL_API_KEY:-}
+      GHOUL_C2_ENABLED: "true"
+      GHOUL_C2_BASE_URL: http://toshell:18081
+      GHOUL_C2_CONSOLE_URL: http://127.0.0.1:18081
+      GHOUL_C2_API_KEY_REF: file:/run/secrets/toshell_api_key
+      GHOUL_C2_ALLOWED_HOSTS: toshell
+      GHOUL_C2_ALLOW_INSECURE_HTTP: "true"
+      GHOUL_C2_ALLOW_CONFIRM: ${GHOUL_C2_ALLOW_CONFIRM:-false}
+      GHOUL_C2_ALLOW_DANGER: ${GHOUL_C2_ALLOW_DANGER:-false}
+      GHOUL_C2_ALLOW_TUNNEL: ${GHOUL_C2_ALLOW_TUNNEL:-false}
+      GHOUL_C2_MCP_URL: http://toshell:18082/mcp
+      GHOUL_C2_MCP_TOKEN_REF: file:/run/secrets/toshell_mcp_token
+      TOSHELL_VERSION: ${TOSHELL_VERSION:-v1.4.3}
+      TOSHELL_COMMIT: ${TOSHELL_COMMIT:-}
     ports:
       - "8787:8787"
       - "127.0.0.1:8788:8788"
     volumes:
+      - toshell_secrets:/run/secrets:ro
       # 本地配置包含 C2 等运行开关；config.json 被 .gitignore 忽略。
       - ./config.json:/app/config.json:ro
       # 把数据目录（含 jwt.key、SQLite 等）绑定到项目根目录的 data/，
@@ -77,3 +153,6 @@ services:
       # 改 skill 无需重建镜像，容器读的就是宿主机这份。
       - ./skills:/app/skills
     restart: unless-stopped
+
+volumes:
+  toshell_secrets:

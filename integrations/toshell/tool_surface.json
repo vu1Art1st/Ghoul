@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "max_tools": 8,
+  "max_tools": 10,
   "schema_token_budget": 2000,
   "output_token_budget": 4000,
   "planner_default": [
@@ -203,6 +203,97 @@
         "local_port": {
           "type": "integer",
           "description": "start 时使用的服务端本地端口。"
+        }
+      },
+      "additional_properties": false,
+      "output_token_budget": 4000
+    },
+    {
+      "name": "c2_listener",
+      "description": "查看、创建、启动、停止或删除 Toshell 监听器；写操作必须审批。",
+      "level": "confirm",
+      "source_tools": [],
+      "planner": false,
+      "worker": true,
+      "required": [
+        "action"
+      ],
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "create",
+            "start",
+            "stop",
+            "delete"
+          ]
+        },
+        "listener_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "bind_addr": {
+          "type": "string"
+        },
+        "bind_port": {
+          "type": "integer"
+        },
+        "public_addr": {
+          "type": "string"
+        }
+      },
+      "additional_properties": false,
+      "output_token_budget": 4000
+    },
+    {
+      "name": "c2_payload",
+      "description": "为 Toshell 监听器构建植入端载荷；Danger 级，必须审批。",
+      "level": "danger",
+      "source_tools": [],
+      "planner": false,
+      "worker": false,
+      "required": [
+        "listener_id",
+        "os",
+        "arch",
+        "format"
+      ],
+      "parameters": {
+        "listener_id": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "interval": {
+          "type": "integer"
+        },
+        "jitter": {
+          "type": "integer"
+        },
+        "language": {
+          "type": "string"
         }
       },
       "additional_properties": false,

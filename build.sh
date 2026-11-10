@@ -190,6 +190,14 @@ package_binary() {
     cp start.sh "$package_root/"
     chmod +x "$package_root/start.sh"
   fi
+  if [ "$goos" = "linux" ]; then
+    info "编译 Linux 宿主工具安装助手 ${goos}/${goarch}"
+    GOSUMDB="$GHOUL_GOSUMDB" CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" \
+      go build -trimpath -ldflags "-s -w -buildid=" \
+      -o "$package_root/ghoul-hostd" ./cmd/ghoul-hostd
+    chmod +x "$package_root/ghoul-hostd"
+    if [ -d deploy ]; then cp -R deploy "$package_root/"; fi
+  fi
   cp -R skills "$package_root/"
   cp config.example.json "$package_root/"
   if [ -f README.md ]; then cp README.md "$package_root/"; fi

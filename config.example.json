@@ -26,6 +26,7 @@
     "enabled": false,
     "provider": "toshell",
     "base_url": "http://127.0.0.1:18081",
+    "console_url": "http://127.0.0.1:18081",
     "api_key_ref": "env:TOSHELL_API_KEY",
     "allow_confirm": false,
     "allow_danger": false

@@ -28,13 +28,22 @@ func (s *Server) c2Status(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	instanceID := s.c2InstanceID(r)
 	var instance *db.C2Instance
-	if len(instances) > 0 {
+	for i := range instances {
+		if instances[i].ID == instanceID {
+			instance = &instances[i]
+			break
+		}
+	}
+	if instance == nil && len(instances) > 0 {
 		instance = &instances[0]
 	}
 	lastError, lastSync := s.c2.state()
-	instanceID := s.c2InstanceID(r)
 	cursor, _ := s.m.pg.GetC2Cursor(r.Context(), instanceID)
+	if lastSync.IsZero() && instance != nil && instance.LastSyncAt != nil {
+		lastSync = *instance.LastSyncAt
+	}
 	sessions, _ := s.m.pg.ListC2Sessions(r.Context(), db.C2SessionFilter{Limit: 1000})
 	listeners, _ := s.m.pg.ListC2Listeners(r.Context(), instanceID)
 	tasks, _ := s.m.pg.ListC2Tasks(r.Context(), instanceID, "", 1000)
@@ -47,8 +56,10 @@ func (s *Server) c2Status(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"enabled":      true,
-		"status":       instanceStatus(instance),
+		"status":       overallC2Status(instanceStatus(instance), cursorStatus(cursor), lastError),
 		"instance":     instance,
+		"console_url":  s.c2.cfg.ConsoleURL,
+		"mcp":          s.c2MCPStatus(r.Context()),
 		"cursor":       cursor,
 		"last_error":   lastError,
 		"last_sync_at": lastSync,
@@ -64,6 +75,26 @@ func (s *Server) c2Status(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func overallC2Status(instanceStatus, cursorStatus, lastError string) string {
+	instanceStatus = strings.TrimSpace(instanceStatus)
+	cursorStatus = strings.TrimSpace(cursorStatus)
+	if strings.TrimSpace(lastError) != "" {
+		return "error"
+	}
+	switch cursorStatus {
+	case "error":
+		return "error"
+	case "reconnecting", "disconnected":
+		return "reconnecting"
+	case "connected":
+		// A live event stream supersedes stale startup/reconnect state.
+		if instanceStatus == "error" || instanceStatus == "connecting" {
+			return "healthy"
+		}
+	}
+	return instanceStatus
+}
+
 func instanceStatus(instance *db.C2Instance) string {
 	if instance == nil {
 		return "unavailable"
@@ -72,6 +103,13 @@ func instanceStatus(instance *db.C2Instance) string {
 		return "unknown"
 	}
 	return instance.Status
+}
+
+func cursorStatus(cursor *db.C2EventCursor) string {
+	if cursor == nil {
+		return ""
+	}
+	return cursor.Status
 }
 
 func (s *Server) c2Instances(w http.ResponseWriter, r *http.Request) {

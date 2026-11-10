@@ -840,6 +840,7 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     url         TEXT,
     enabled     BOOLEAN NOT NULL DEFAULT true,
     insecure    BOOLEAN NOT NULL DEFAULT false,  -- http: 跳过 TLS 证书校验(自签证书场景, issue #108)
+    tool_allowlist JSONB NOT NULL DEFAULT '[]', -- 空 = 全部工具；非空 = Ghoul 侧再次裁剪
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -850,6 +851,7 @@ ALTER TABLE mcp_servers ADD CONSTRAINT mcp_servers_transport_check
     CHECK (transport IN ('stdio','http','sse'));
 -- 旧库补列(schema.sql 每次启动都会 Exec)。
 ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS insecure BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS tool_allowlist JSONB NOT NULL DEFAULT '[]';
 DROP TRIGGER IF EXISTS trg_mcp_upd ON mcp_servers;
 CREATE TRIGGER trg_mcp_upd BEFORE UPDATE ON mcp_servers
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -947,6 +949,56 @@ CREATE TABLE IF NOT EXISTS tools (
 DROP TRIGGER IF EXISTS trg_tools_upd ON tools;
 CREATE TRIGGER trg_tools_upd BEFORE UPDATE ON tools
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Shared, reviewed artifacts and managed host-environment jobs. These tables
+-- deliberately have no task FK: source provenance survives task deletion.
+CREATE TABLE IF NOT EXISTS shared_assets (
+    id            BIGSERIAL PRIMARY KEY,
+    name          TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    description   TEXT NOT NULL DEFAULT '',
+    tags          JSONB NOT NULL DEFAULT '[]',
+    language      TEXT NOT NULL DEFAULT '',
+    entrypoint    TEXT NOT NULL DEFAULT '',
+    usage         TEXT NOT NULL DEFAULT '',
+    dependencies  JSONB NOT NULL DEFAULT '[]',
+    current_version INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'pending_review',
+    source_task_id BIGINT,
+    source_intent_id BIGINT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(name)
+);
+CREATE INDEX IF NOT EXISTS idx_shared_assets_status ON shared_assets(status, updated_at DESC);
+DROP TRIGGER IF EXISTS trg_shared_assets_upd ON shared_assets;
+CREATE TRIGGER trg_shared_assets_upd BEFORE UPDATE ON shared_assets
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS shared_asset_versions (
+    id            BIGSERIAL PRIMARY KEY,
+    asset_id      BIGINT NOT NULL REFERENCES shared_assets(id) ON DELETE CASCADE,
+    version       INTEGER NOT NULL,
+    source_path   TEXT NOT NULL DEFAULT '',
+    content_hash  TEXT NOT NULL,
+    validation    JSONB NOT NULL DEFAULT '{}',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(asset_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS host_install_jobs (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL,
+    target        TEXT NOT NULL,
+    state         TEXT NOT NULL,
+    exit_code     INTEGER NOT NULL DEFAULT 0,
+    error         TEXT NOT NULL DEFAULT '',
+    log           TEXT NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at    TIMESTAMPTZ,
+    ended_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_host_install_jobs_created ON host_install_jobs(created_at DESC);
 
 -- =====================================================================
 -- I. 会话（对话页）
@@ -1496,7 +1548,7 @@ CREATE TABLE IF NOT EXISTS c2_operations (
     id                 BIGSERIAL PRIMARY KEY,
     instance_id        BIGINT NOT NULL REFERENCES c2_instances(id) ON DELETE CASCADE,
     task_id            BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    c2_session_id      BIGINT NOT NULL REFERENCES c2_sessions(id) ON DELETE RESTRICT,
+    c2_session_id      BIGINT REFERENCES c2_sessions(id) ON DELETE RESTRICT,
     binding_id         BIGINT REFERENCES c2_session_bindings(id) ON DELETE SET NULL,
     tool               TEXT NOT NULL,
     action             TEXT NOT NULL DEFAULT '',
@@ -1527,6 +1579,7 @@ CREATE TABLE IF NOT EXISTS c2_operations (
     UNIQUE (instance_id, idempotency_key)
 );
 ALTER TABLE c2_operations ADD COLUMN IF NOT EXISTS execution_params_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE c2_operations ALTER COLUMN c2_session_id DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_c2_operations_task
     ON c2_operations(task_id, requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_c2_operations_status
@@ -1564,7 +1617,7 @@ CREATE TABLE IF NOT EXISTS c2_evidence (
     id             BIGSERIAL PRIMARY KEY,
     operation_id   BIGINT NOT NULL REFERENCES c2_operations(id) ON DELETE CASCADE,
     task_id        BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    c2_session_id  BIGINT NOT NULL REFERENCES c2_sessions(id) ON DELETE RESTRICT,
+    c2_session_id  BIGINT REFERENCES c2_sessions(id) ON DELETE RESTRICT,
     finding_id     BIGINT REFERENCES findings(id) ON DELETE SET NULL,
     kind           TEXT NOT NULL DEFAULT 'output',
     title          TEXT NOT NULL DEFAULT '',
@@ -1579,6 +1632,7 @@ CREATE TABLE IF NOT EXISTS c2_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_c2_evidence_operation ON c2_evidence(operation_id, id);
 CREATE INDEX IF NOT EXISTS idx_c2_evidence_finding ON c2_evidence(finding_id, id DESC);
+ALTER TABLE c2_evidence ALTER COLUMN c2_session_id DROP NOT NULL;
 
 -- =====================================================================
 -- M. 后端日志持久化

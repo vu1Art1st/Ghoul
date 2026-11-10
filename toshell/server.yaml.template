@@ -1,0 +1,91 @@
+auth:
+  admin_password: "${TOSHELL_ADMIN_PASSWORD}"
+  admin_username: "${TOSHELL_ADMIN_USERNAME}"
+  api_key_enabled: true
+  api_keys:
+    - "${TOSHELL_API_KEY}"
+  enabled: true
+  jwt_enabled: true
+  jwt_expire: 24
+  jwt_key: ""
+
+database:
+  type: sqlite
+  path: /opt/toshell/data/toshell.db
+
+implant:
+  interval: 60
+  jitter: 20
+  retry_count: 3
+  retry_wait: 5
+  startup_delay_min: 2
+  startup_delay_max: 10
+  output_dir: /opt/toshell/implants
+
+listener:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080
+  protocol: tcp
+  public_host: "${TOSHELL_PUBLIC_HOST}"
+  encryption_key: ""
+  heartbeat_timeout: 240s
+  payload_host_enabled: true
+  payload_host_port: 8081
+  payload_host_prefix: s
+
+server:
+  api_host: 0.0.0.0
+  api_port: 18081
+  host: 0.0.0.0
+  port: 8080
+
+logging:
+  level: info
+  format: json
+  output: stdout
+
+ai:
+  enabled: false
+
+mcp:
+  enabled: true
+  bind: 0.0.0.0:18082
+  token: "${TOSHELL_MCP_TOKEN}"
+  allowed_tools:
+    - attack_suggest
+    - intel_query
+    - playbook_status
+    - plugin_list
+    - result_read
+    - session_context
+    - session_list
+    - task_result
+    - task_wait
+    - tool_download_status
+    - tool_list
+    - tunnel_list
+    - web_search
+  allowed_origins: []
+  allowed_cidrs: []
+  max_rpm: 120
+  max_concurrent: 4
+  max_pending_handles: 32
+  inline_limit: 8192
+  result_dir: /opt/toshell/data/mcp-results
+  result_ttl: 24h
+  audit_path: /opt/toshell/logs/mcp-audit.jsonl
+  fail_closed: true
+
+web:
+  basic_auth_enabled: false
+  unauth_mode: basic
+
+avops:
+  allow_l2: false
+  allow_l3: false
+  allow_l4: false
+  require_confirm: true
+
+task:
+  output_max_bytes: 262144

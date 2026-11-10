@@ -2,6 +2,20 @@
 
 本目录冻结 Ghoul 与 Toshell 的 Phase 0 集成契约。Toshell 以独立 sidecar 运行，Ghoul 只通过服务端 REST 适配器访问它；不复制 Toshell 源码，不把 Toshell Web 控制台嵌入 Ghoul。
 
+## MCP-first 集成（Phase A-C）
+
+当前推荐路线使用 Toshell sidecar，不把 Toshell 源码固化进 Ghoul：
+
+- `docker compose up -d` 自动启动 `toshell-bootstrap` 和 `toshell`。
+- Toshell MCP 只对 Ghoul 开放 13 个只读工具，其余工具由 sidecar 白名单和 Ghoul 客户端白名单双重拦截。
+- Ghoul 的 `c2_*` Adapter 继续负责 Confirm/Danger、审批、证据和 Finding 关联。
+- MCP token、API Key 和管理员密码由首启 bootstrap 生成，保存在 Compose 命名卷中，不写入仓库。
+- 升级只修改 `TOSHELL_VERSION` 后重建 sidecar；如 GitHub Release 下载较慢，可设置 `TOSHELL_RELEASE_BASE` 使用镜像源。
+
+只读 MCP Skill：`skills/c2-mcp-readonly`。它会解锁 `session_list`、`session_context`、`intel_query`、`task_result`、`result_read` 等只读工具。
+
+`c2_listener` 负责监听器生命周期，`c2_payload` 负责审批式载荷构建。高级载荷选项、插件、AV-Ops 和交互式排障仍使用 Toshell 控制台，Ghoul C2 页面提供运维入口。
+
 ## 基线
 
 - Toshell：`v1.4.3`，commit `8bf4643c1affbe109993123475422f6d26897903`
@@ -9,7 +23,8 @@
 - 上游：<https://github.com/iQingshan/Toshell>
 - 已冻结端点：`GET /api/v1/health`、`GET /api/v1/mcp/tools`、`GET /api/v1/sessions`
 - 工具表：38 个，read 13 / confirm 14 / danger 11
-- Ghoul Agent 工具面：8 个原生 `c2_*` 工具，Planner 默认只加载其中 3 个只读工具
+- Ghoul Agent 工具面：10 个原生 `c2_*` 工具，Planner 默认只加载其中 3 个只读工具
+- Toshell MCP：只读 13 工具，通过 `c2-mcp-readonly` Skill 按需解锁
 
 版本和许可证元数据见 [`source.json`](source.json)。完整工具等级见 [`contract/expected_levels.json`](contract/expected_levels.json)，裁剪后的工具面见 [`tool_surface.json`](tool_surface.json)。
 
@@ -94,7 +109,7 @@ go test ./integrations/toshell/contract
 
 ## 工具面
 
-第一版只暴露 8 个 Ghoul 原生工具：
+当前只暴露 10 个 Ghoul 原生工具：
 
 | 工具 | 等级 | Planner | 用途 |
 |---|---|---|---|
@@ -106,6 +121,8 @@ go test ./integrations/toshell/contract
 | `c2_screenshot` | confirm | 否 | 截屏 |
 | `c2_exec` | danger | 否 | 任意命令，必须一次性审批 |
 | `c2_tunnel` | confirm | 否 | 查看、启动、停止隧道 |
+| `c2_listener` | confirm | 否 | 查看、创建、启动、停止或删除监听器 |
+| `c2_payload` | danger | 否 | 审批式构建载荷并返回元数据 |
 
 不向 Agent 暴露 `exec_module`、BYOVD、EDR、PPL、持久化、注入、AV-Ops L1+，也不直接注册 Toshell 的 38 个 MCP 工具。
 

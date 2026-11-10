@@ -350,6 +350,90 @@ export interface WorkspaceFile {
   content?: string;
 }
 
+// ---- Host environment and shared artifact library ----
+export interface HostTool {
+  id: string;
+  name: string;
+  purpose: string;
+  category: string;
+  kind: "apt" | "github" | "python" | "manual";
+  package?: string;
+  import?: string;
+  available: boolean;
+  path?: string;
+  version?: string;
+  installable: boolean;
+  install?: string;
+}
+
+export interface PythonPackage {
+  name: string;
+  version?: string;
+}
+
+export interface HostInstallJob {
+  id: string;
+  kind: string;
+  target: string;
+  state: "queued" | "running" | "done" | "failed" | "cancelled" | "interrupted";
+  exit_code: number;
+  error?: string;
+  log: string;
+  created_at: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface HostenvStatus {
+  deploy_mode: string;
+  os: string;
+  arch: string;
+  tools: HostTool[];
+  python: {
+    available: boolean;
+    interpreter: string;
+    packages: PythonPackage[];
+  };
+  installer: {
+    available: boolean;
+    privileged_helper: boolean;
+    proxy: string;
+  };
+}
+
+export interface SharedAsset {
+  id: number;
+  name: string;
+  kind: "script" | "tool" | "library";
+  description: string;
+  tags: string[];
+  language: string;
+  entrypoint: string;
+  usage: string;
+  dependencies: string[];
+  current_version: number;
+  status: "pending_review" | "published" | "disabled" | "archived";
+  source_task_id: number;
+  source_intent_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SharedPublishInput {
+  name: string;
+  kind: SharedAsset["kind"];
+  description: string;
+  tags: string[];
+  language: string;
+  entrypoint: string;
+  usage: string;
+  dependencies: string[];
+  source_path: string;
+  source_task_id?: number;
+  source_intent_id?: number;
+  asset_id?: number;
+}
+
 // 任务测试范围的一条（覆盖度分母 + 授权边界）。
 export interface TaskScopeRow {
   id: number;
@@ -1286,6 +1370,7 @@ export interface MCPServer {
   url?: string;
   enabled: boolean;
   insecure?: boolean; // http: skip TLS cert verification (self-signed servers)
+  tool_allowlist?: string[]; // Ghoul-side allowlist applied after MCP tools/list
   tools?: string[]; // mcp_tools_cache (names only, for the count)
 }
 
@@ -1859,6 +1944,18 @@ export interface C2Status {
   enabled: boolean;
   status: string;
   instance?: C2Instance;
+  console_url?: string;
+  mcp?: {
+    configured: boolean;
+    enabled?: boolean;
+    url?: string;
+    tool_count?: number;
+    allowlist_count?: number;
+    expected_readonly?: number;
+    missing_tools?: string[];
+    console_url?: string;
+    version_hint?: string;
+  };
   cursor?: {
     last_event_id: string;
     last_event_at?: string;
@@ -1900,7 +1997,7 @@ export interface C2Operation {
   id: string;
   instance_id: string;
   task_id: string;
-  c2_session_id: string;
+  c2_session_id?: string;
   binding_id?: string;
   tool: string;
   action: string;
@@ -1946,7 +2043,7 @@ export interface C2Evidence {
   id: string;
   operation_id: string;
   task_id: string;
-  c2_session_id: string;
+  c2_session_id?: string;
   finding_id?: string;
   kind: string;
   title: string;

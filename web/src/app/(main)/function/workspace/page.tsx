@@ -11,6 +11,7 @@ import {
   SaveIcon,
   Trash2Icon,
   UploadIcon,
+  LibraryBigIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -42,6 +43,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { SharedPublishDialog } from "@/components/shared-publish-dialog";
 import type { WorkspaceEntry, WorkspaceFile } from "@/lib/types";
 
 function fmtSize(n: number): string {
@@ -75,6 +77,7 @@ export default function WorkspacePage() {
   const [mkdirOpen, setMkdirOpen] = React.useState(false);
   const [mkdirName, setMkdirName] = React.useState("");
   const uploadRef = React.useRef<HTMLInputElement>(null);
+  const [publish, setPublish] = React.useState<WorkspaceEntry | null>(null);
 
   const load = React.useCallback(
     (p: string) => {
@@ -263,6 +266,11 @@ export default function WorkspacePage() {
                           <DownloadIcon className="size-3.5" />
                         </Button>
                       )}
+                      {path !== "shared" && !path.startsWith("shared/") && (
+                        <Button variant="ghost" size="icon" className="size-7" title="发布到共享空间" onClick={() => setPublish(e)}>
+                          <LibraryBigIcon className="size-3.5" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -359,6 +367,13 @@ export default function WorkspacePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <SharedPublishDialog
+        open={Boolean(publish)}
+        onOpenChange={(open) => !open && setPublish(null)}
+        sourcePath={publish?.path}
+        isDirectory={publish?.dir}
+      />
     </div>
   );
 }

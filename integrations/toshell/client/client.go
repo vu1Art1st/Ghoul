@@ -137,6 +137,28 @@ type Listener struct {
 	Options     string `json:"options,omitempty"`
 }
 
+type CreateListenerRequest struct {
+	Name       string         `json:"name"`
+	Type       string         `json:"type"`
+	Protocol   string         `json:"protocol,omitempty"`
+	BindAddr   string         `json:"bind_addr,omitempty"`
+	BindPort   int            `json:"bind_port,omitempty"`
+	PublicAddr string         `json:"public_addr,omitempty"`
+	Options    map[string]any `json:"options,omitempty"`
+}
+
+type BuildResponse struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Format      string `json:"format"`
+	Size        int    `json:"size"`
+	SHA256      string `json:"sha256"`
+	BuildTime   string `json:"build_time"`
+	DownloadURL string `json:"download_url"`
+	HostedURL   string `json:"hosted_url"`
+	Signed      bool   `json:"signed"`
+}
+
 type ChannelHealth struct {
 	Channels     []Channel `json:"channels"`
 	TotalOnline  int       `json:"total_online"`
@@ -377,6 +399,46 @@ func (c *Client) Listeners(ctx context.Context) ([]Listener, error) {
 		return nil, err
 	}
 	return out.Listeners, nil
+}
+
+func (c *Client) CreateListener(ctx context.Context, req CreateListenerRequest) (*Listener, error) {
+	var out Listener
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/listeners", req, &out, false); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) StartListener(ctx context.Context, id string) (map[string]any, error) {
+	var out map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/listeners/"+url.PathEscape(id)+"/start", nil, &out, false); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) StopListener(ctx context.Context, id string) (map[string]any, error) {
+	var out map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/listeners/"+url.PathEscape(id)+"/stop", nil, &out, false); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) DeleteListener(ctx context.Context, id string) (map[string]any, error) {
+	var out map[string]any
+	if err := c.doJSON(ctx, http.MethodDelete, "/api/v1/listeners/"+url.PathEscape(id), nil, &out, false); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) BuildPayload(ctx context.Context, req map[string]any) (*BuildResponse, error) {
+	var out BuildResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/builders", req, &out, false); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func (c *Client) ChannelsHealth(ctx context.Context) (*ChannelHealth, error) {

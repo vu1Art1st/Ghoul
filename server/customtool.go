@@ -195,6 +195,11 @@ func detectPython() string {
 // pythonInterpreter resolves the interpreter: user-set > stored auto-detect > live
 // detect. "" only when truly none found.
 func (s *Server) pythonInterpreter() string {
+	if s.shared != nil {
+		if _, err := os.Stat(s.shared.Python()); err == nil {
+			return s.shared.Python()
+		}
+	}
 	if v, ok, _ := s.m.pg.GetSetting(settingPythonInterp); ok && strings.TrimSpace(v) != "" {
 		return strings.TrimSpace(v)
 	}

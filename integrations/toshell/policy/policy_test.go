@@ -61,3 +61,37 @@ func TestBindingAndScopeAreMandatory(t *testing.T) {
 		t.Fatalf("binding error = %v", err)
 	}
 }
+
+func TestTaskLevelListenerAndPayloadActions(t *testing.T) {
+	base := Request{TaskID: 7, Action: "c2_listener", ScopeRows: 1, Config: Config{Enabled: true}}
+	base.SubAction = "list"
+	got, err := Evaluate(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Action.Level != LevelRead || got.ApprovalNeeded {
+		t.Fatalf("listener list decision = %+v", got)
+	}
+
+	base.SubAction = "start"
+	base.Config.AllowConfirm = true
+	got, err = Evaluate(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Action.Level != LevelConfirm || !got.ApprovalNeeded {
+		t.Fatalf("listener start decision = %+v", got)
+	}
+
+	payload := Request{
+		TaskID: 7, Action: "c2_payload", SubAction: "build", ScopeRows: 1,
+		Config: Config{Enabled: true, AllowConfirm: true, AllowDanger: true},
+	}
+	got, err = Evaluate(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Action.Level != LevelDanger || got.ApprovalStages != 2 {
+		t.Fatalf("payload decision = %+v", got)
+	}
+}

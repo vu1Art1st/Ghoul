@@ -39,8 +39,8 @@ export default function C2Page() {
 
   const selected = sessions.find((item) => item.session_id === selectedId);
 
-  const load = React.useCallback(async () => {
-    setLoading(true);
+  const load = React.useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [statusData, sessionData, listenerData, eventData] = await Promise.all([
         api.c2Status(),
@@ -52,20 +52,19 @@ export default function C2Page() {
       setSessions(sessionData.items);
       setListeners(listenerData.items);
       setEvents(eventData.items);
-      if (!selectedId && sessionData.items.length > 0) {
-        setSelectedId(sessionData.items[0].session_id);
-      }
+      setSelectedId((current) => current || sessionData.items[0]?.session_id || "");
     } catch (error) {
-      toast.error(`加载 C2 状态失败: ${error}`);
+      if (!silent) toast.error(`加载 C2 状态失败: ${error}`);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, [selectedId]);
+  }, []);
 
   React.useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void load(false);
+    const timer = window.setInterval(() => void load(true), 5_000);
+    return () => window.clearInterval(timer);
+  }, [load]);
 
   React.useEffect(() => {
     if (!selectedId) {
@@ -152,6 +151,9 @@ export default function C2Page() {
   }
 
   const instance = status?.instance;
+  const advancedConsoleURL = status?.console_url || status?.mcp?.console_url || instance?.base_url;
+  const statusVariant =
+    status?.status === "error" ? "destructive" : status?.status === "reconnecting" ? "secondary" : "default";
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -159,7 +161,7 @@ export default function C2Page() {
         <div className="flex items-center gap-2">
           <Monitor className="size-5" />
           <h1 className="text-lg font-semibold">C2 会话</h1>
-          <Badge variant={status?.enabled ? "default" : "secondary"}>{status?.enabled ? status.status : "未启用"}</Badge>
+          <Badge variant={status?.enabled ? statusVariant : "secondary"}>{status?.enabled ? status.status : "未启用"}</Badge>
           {status?.cursor?.status ? <Badge variant="outline">事件 {status.cursor.status}</Badge> : null}
         </div>
         <div className="flex items-center gap-2">
@@ -169,6 +171,14 @@ export default function C2Page() {
               审批中心
             </Link>
           </Button>
+          {advancedConsoleURL ? (
+            <Button variant="outline" size="sm" asChild>
+              <a href={advancedConsoleURL} target="_blank" rel="noreferrer">
+                <ExternalLink />
+                Toshell 控制台
+              </a>
+            </Button>
+          ) : null}
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={loading ? "animate-spin" : ""} />
@@ -184,7 +194,7 @@ export default function C2Page() {
         </Card>
       ) : (
         <>
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-xs text-muted-foreground">实例</CardTitle>
@@ -194,13 +204,38 @@ export default function C2Page() {
                   <div className="truncate text-lg font-semibold">{instance?.name || "Toshell"}</div>
                   {instance?.base_url ? (
                     <Button variant="ghost" size="icon" asChild>
-                      <a href={instance.base_url} target="_blank" rel="noreferrer">
+                      <a href={advancedConsoleURL} target="_blank" rel="noreferrer" title="打开 Toshell 高级控制台">
                         <ExternalLink />
                       </a>
                     </Button>
                   ) : null}
                 </div>
                 <div className="text-muted-foreground truncate text-xs">{instance?.base_url}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs text-muted-foreground">MCP 只读面</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-lg font-semibold tabular-nums">
+                    {status.mcp?.configured ? `${status.mcp.tool_count ?? 0} 工具` : "未配置"}
+                  </div>
+                  <Badge variant={status.mcp?.enabled ? "default" : "outline"}>
+                    {status.mcp?.configured ? (status.mcp.enabled ? "enabled" : "disabled") : "off"}
+                  </Badge>
+                </div>
+                <div className="text-muted-foreground truncate text-xs">
+                  {status.mcp?.configured
+                    ? `白名单 ${status.mcp.allowlist_count ?? 0}/${status.mcp.expected_readonly ?? 0}`
+                    : "设置 GHOUL_C2_MCP_URL 后启用"}
+                </div>
+                {status.mcp?.missing_tools?.length ? (
+                  <div className="mt-1 truncate text-xs text-amber-600" title={status.mcp.missing_tools.join(", ")}>
+                    缺少 {status.mcp.missing_tools.length} 个只读工具
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
             <Card>

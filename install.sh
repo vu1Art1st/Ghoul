@@ -45,11 +45,8 @@ install_docker(){
   else
     info "沿用已存在的 .env"
   fi
-  info "拉取镜像并启动…"
-  if ! docker compose pull ghoul; then
-    warn "镜像拉取失败，改为从源码构建 ghoul 镜像"
-    docker compose build ghoul
-  fi
+  info "从源码构建本地镜像并启动…"
+  docker compose build ghoul
   docker compose up -d
   ok "启动完成 → http://localhost:8787"
   info "查看日志：docker compose logs -f ghoul"

@@ -326,6 +326,8 @@ var builtinSkillVisibility = map[string][]string{
 	"component-vuln-intel": {"planner", "pentest", "worker"},
 	"c2-readonly":          {"planner"},
 	"c2-operations":        {"worker", "pentest"},
+	"c2-mcp-readonly":      {"planner", "worker", "pentest"},
+	"redteam-ops":          {"worker", "pentest"},
 }
 
 // seedBuiltinSkillVisibility binds the shipped built-in skills to their default

@@ -74,6 +74,53 @@ func TestClientReadEndpoints(t *testing.T) {
 	}
 }
 
+func TestClientListenerAndPayloadWrites(t *testing.T) {
+	t.Setenv("TEST_TOSHELL_KEY", "secret-value")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-Key") != "secret-value" {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/listeners":
+			_, _ = w.Write([]byte(`{"id":"l-new","name":"lab","type":"tcp","status":"stopped"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/listeners/l-new/start":
+			_, _ = w.Write([]byte(`{"id":"l-new","status":"running"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/listeners/l-new/stop":
+			_, _ = w.Write([]byte(`{"id":"l-new","status":"stopped"}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/listeners/l-new":
+			_, _ = w.Write([]byte(`{"deleted":"l-new"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/builders":
+			_, _ = w.Write([]byte(`{"id":"build-1","name":"lab","format":"exe","sha256":"abc","hosted_url":"http://lab/s/token/build-1.exe"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	c, err := New(Config{BaseURL: server.URL, APIKeyRef: "env:TEST_TOSHELL_KEY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	l, err := c.CreateListener(ctx, CreateListenerRequest{Name: "lab", Type: "tcp", BindPort: 4567})
+	if err != nil || l.ID != "l-new" {
+		t.Fatalf("create listener: %+v %v", l, err)
+	}
+	if _, err := c.StartListener(ctx, l.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.StopListener(ctx, l.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DeleteListener(ctx, l.ID); err != nil {
+		t.Fatal(err)
+	}
+	build, err := c.BuildPayload(ctx, map[string]any{"listener_id": l.ID, "os": "windows", "arch": "amd64", "format": "exe"})
+	if err != nil || build.ID != "build-1" || build.SHA256 != "abc" {
+		t.Fatalf("build payload: %+v %v", build, err)
+	}
+}
+
 func TestClientRejectsUnsafeTransportAndHost(t *testing.T) {
 	if _, err := New(Config{BaseURL: "http://192.0.2.10:18081", APIKeyRef: "env:TEST_TOSHELL_KEY"}); err == nil {
 		t.Fatal("non-loopback HTTP sidecar must be rejected")

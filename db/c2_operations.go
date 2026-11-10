@@ -19,7 +19,7 @@ type C2Operation struct {
 	ID               int64                `json:"id,string"`
 	InstanceID       int64                `json:"instance_id,string"`
 	TaskID           int64                `json:"task_id,string"`
-	C2SessionID      int64                `json:"c2_session_id,string"`
+	C2SessionID      int64                `json:"c2_session_id,string,omitempty"`
 	BindingID        *int64               `json:"binding_id,string,omitempty"`
 	Tool             string               `json:"tool"`
 	Action           string               `json:"action"`
@@ -77,8 +77,9 @@ func scanC2Operation(row interface{ Scan(...any) error }) (*C2Operation, error) 
 	var item C2Operation
 	var params, executionParams, scope []byte
 	var binding sql.NullInt64
+	var c2Session sql.NullInt64
 	var approved, dispatched, completed, expires sql.NullTime
-	err := row.Scan(&item.ID, &item.InstanceID, &item.TaskID, &item.C2SessionID, &binding,
+	err := row.Scan(&item.ID, &item.InstanceID, &item.TaskID, &c2Session, &binding,
 		&item.Tool, &item.Action, &item.Level, &item.Actor, &item.Source, &params, &executionParams,
 		&item.ParamsHash, &item.IdempotencyKey, &item.Status, &item.ApprovalRequired,
 		&item.ApprovalStages, &scope, &item.ExternalTaskID, &item.OutputSummary,
@@ -92,6 +93,9 @@ func scanC2Operation(row interface{ Scan(...any) error }) (*C2Operation, error) 
 	}
 	if binding.Valid {
 		item.BindingID = &binding.Int64
+	}
+	if c2Session.Valid {
+		item.C2SessionID = c2Session.Int64
 	}
 	item.ParamsJSON, item.ExecutionParams, item.ScopeSnapshot = params, executionParams, scope
 	if approved.Valid {
@@ -110,8 +114,8 @@ func scanC2Operation(row interface{ Scan(...any) error }) (*C2Operation, error) 
 }
 
 func (d *DB) CreateC2Operation(ctx context.Context, in C2OperationInput) (*C2Operation, error) {
-	if in.InstanceID <= 0 || in.TaskID <= 0 || in.C2SessionID <= 0 || strings.TrimSpace(in.Tool) == "" {
-		return nil, errors.New("instance_id, task_id, c2_session_id and tool are required")
+	if in.InstanceID <= 0 || in.TaskID <= 0 || strings.TrimSpace(in.Tool) == "" {
+		return nil, errors.New("instance_id, task_id and tool are required")
 	}
 	if in.Status == "" {
 		in.Status = "pending_approval"
@@ -141,6 +145,10 @@ func (d *DB) CreateC2Operation(ctx context.Context, in C2OperationInput) (*C2Ope
 	if in.BindingID > 0 {
 		binding = in.BindingID
 	}
+	var c2Session any
+	if in.C2SessionID > 0 {
+		c2Session = in.C2SessionID
+	}
 	var expires any
 	if in.ExpiresAt != nil {
 		expires = *in.ExpiresAt
@@ -148,6 +156,7 @@ func (d *DB) CreateC2Operation(ctx context.Context, in C2OperationInput) (*C2Ope
 	var item C2Operation
 	var params, executionParams, scope []byte
 	var scanBinding sql.NullInt64
+	var scanC2Session sql.NullInt64
 	var approved, dispatched, completed, expiresAt sql.NullTime
 	err := d.QueryRowContext(ctx, `INSERT INTO c2_operations
 		(instance_id,task_id,c2_session_id,binding_id,tool,action,level,actor,source,
@@ -155,10 +164,10 @@ func (d *DB) CreateC2Operation(ctx context.Context, in C2OperationInput) (*C2Ope
 		 scope_snapshot,expires_at)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		RETURNING `+c2OperationCols,
-		in.InstanceID, in.TaskID, in.C2SessionID, binding, in.Tool, in.Action, in.Level,
+		in.InstanceID, in.TaskID, c2Session, binding, in.Tool, in.Action, in.Level,
 		in.Actor, in.Source, string(in.ParamsJSON), string(in.ExecutionParams), in.ParamsHash, in.IdempotencyKey,
 		in.Status, in.ApprovalRequired, in.ApprovalStages, string(in.ScopeSnapshot), expires).
-		Scan(&item.ID, &item.InstanceID, &item.TaskID, &item.C2SessionID, &scanBinding,
+		Scan(&item.ID, &item.InstanceID, &item.TaskID, &scanC2Session, &scanBinding,
 			&item.Tool, &item.Action, &item.Level, &item.Actor, &item.Source, &params, &executionParams,
 			&item.ParamsHash, &item.IdempotencyKey, &item.Status, &item.ApprovalRequired,
 			&item.ApprovalStages, &scope, &item.ExternalTaskID, &item.OutputSummary,
@@ -169,6 +178,9 @@ func (d *DB) CreateC2Operation(ctx context.Context, in C2OperationInput) (*C2Ope
 	}
 	if scanBinding.Valid {
 		item.BindingID = &scanBinding.Int64
+	}
+	if scanC2Session.Valid {
+		item.C2SessionID = scanC2Session.Int64
 	}
 	item.ParamsJSON, item.ExecutionParams, item.ScopeSnapshot = params, executionParams, scope
 	if approved.Valid {
@@ -505,7 +517,7 @@ type C2Evidence struct {
 	ID           int64           `json:"id,string"`
 	OperationID  int64           `json:"operation_id,string"`
 	TaskID       int64           `json:"task_id,string"`
-	C2SessionID  int64           `json:"c2_session_id,string"`
+	C2SessionID  int64           `json:"c2_session_id,string,omitempty"`
 	FindingID    *int64          `json:"finding_id,string,omitempty"`
 	Kind         string          `json:"kind"`
 	Title        string          `json:"title"`
@@ -525,8 +537,9 @@ const c2EvidenceCols = `id,operation_id,task_id,c2_session_id,finding_id,kind,ti
 func scanC2Evidence(row interface{ Scan(...any) error }) (*C2Evidence, error) {
 	var item C2Evidence
 	var finding sql.NullInt64
+	var c2Session sql.NullInt64
 	var metadata []byte
-	err := row.Scan(&item.ID, &item.OperationID, &item.TaskID, &item.C2SessionID, &finding,
+	err := row.Scan(&item.ID, &item.OperationID, &item.TaskID, &c2Session, &finding,
 		&item.Kind, &item.Title, &item.Mime, &item.Content, &item.StorageRef, &item.SHA256,
 		&item.Size, &item.Redacted, &metadata, &item.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -538,13 +551,16 @@ func scanC2Evidence(row interface{ Scan(...any) error }) (*C2Evidence, error) {
 	if finding.Valid {
 		item.FindingID = &finding.Int64
 	}
+	if c2Session.Valid {
+		item.C2SessionID = c2Session.Int64
+	}
 	item.MetadataJSON = metadata
 	return &item, nil
 }
 
 func (d *DB) AddC2Evidence(ctx context.Context, item C2Evidence) (*C2Evidence, error) {
-	if item.OperationID <= 0 || item.TaskID <= 0 || item.C2SessionID <= 0 {
-		return nil, errors.New("operation_id, task_id and c2_session_id are required")
+	if item.OperationID <= 0 || item.TaskID <= 0 {
+		return nil, errors.New("operation_id and task_id are required")
 	}
 	if item.Kind == "" {
 		item.Kind = "output"
@@ -569,11 +585,15 @@ func (d *DB) AddC2Evidence(ctx context.Context, item C2Evidence) (*C2Evidence, e
 	if item.FindingID != nil && *item.FindingID > 0 {
 		finding = *item.FindingID
 	}
+	var c2Session any
+	if item.C2SessionID > 0 {
+		c2Session = item.C2SessionID
+	}
 	return scanC2Evidence(d.QueryRowContext(ctx, `INSERT INTO c2_evidence
 		(operation_id,task_id,c2_session_id,finding_id,kind,title,mime,content,storage_ref,
 		 sha256,size,redacted,metadata_json)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING `+c2EvidenceCols,
-		item.OperationID, item.TaskID, item.C2SessionID, finding, item.Kind, item.Title,
+		item.OperationID, item.TaskID, c2Session, finding, item.Kind, item.Title,
 		item.Mime, item.Content, item.StorageRef, item.SHA256, item.Size, item.Redacted,
 		string(item.MetadataJSON)))
 }

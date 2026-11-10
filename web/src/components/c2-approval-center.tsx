@@ -225,7 +225,7 @@ export function C2ApprovalCenter({ baseURL }: { baseURL?: string }) {
                   </div>
                   <div className="mt-2 text-lg font-semibold">{operation.tool}</div>
                   <div className="text-muted-foreground text-xs">
-                    task {operation.task_id} · session {operation.c2_session_id} · {fmtTime(operation.requested_at)}
+                    task {operation.task_id} · session {operation.c2_session_id || "task-level"} · {fmtTime(operation.requested_at)}
                   </div>
                 </div>
                 {baseURL ? (

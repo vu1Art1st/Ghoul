@@ -47,9 +47,10 @@ type Config struct {
 }
 
 type Action struct {
-	Name       string
-	Level      Level
-	SourceTool string
+	Name            string
+	Level           Level
+	SourceTool      string
+	SessionOptional bool
 }
 
 var actions = map[string]Action{
@@ -61,6 +62,8 @@ var actions = map[string]Action{
 	"c2_screenshot":      {Name: "c2_screenshot", Level: LevelConfirm, SourceTool: "screenshot"},
 	"c2_tunnel":          {Name: "c2_tunnel", Level: LevelConfirm, SourceTool: "tunnel"},
 	"c2_exec":            {Name: "c2_exec", Level: LevelDanger, SourceTool: "exec"},
+	"c2_listener":        {Name: "c2_listener", Level: LevelConfirm, SourceTool: "listener", SessionOptional: true},
+	"c2_payload":         {Name: "c2_payload", Level: LevelDanger, SourceTool: "builders", SessionOptional: true},
 }
 
 func Lookup(name string) (Action, bool) {
@@ -73,10 +76,41 @@ func Catalog() []Action {
 	for _, name := range []string{
 		"c2_session_list", "c2_session_context", "c2_recon", "c2_file_list",
 		"c2_process_list", "c2_screenshot", "c2_tunnel", "c2_exec",
+		"c2_listener", "c2_payload",
 	} {
 		out = append(out, actions[name])
 	}
 	return out
+}
+
+// LookupWithAction resolves action-specific levels for multiplexed tools. A
+// listener list is read-only, while create/start/stop and delete move through
+// Confirm and Danger. Payload construction is always Danger.
+func LookupWithAction(name, subAction string) (Action, bool) {
+	action, ok := Lookup(name)
+	if !ok {
+		return Action{}, false
+	}
+	subAction = strings.ToLower(strings.TrimSpace(subAction))
+	switch action.Name {
+	case "c2_listener":
+		switch subAction {
+		case "list":
+			action.Level = LevelRead
+		case "create", "start", "stop":
+			action.Level = LevelConfirm
+		case "delete":
+			action.Level = LevelDanger
+		default:
+			return Action{}, false
+		}
+	case "c2_payload":
+		if subAction != "" && subAction != "build" {
+			return Action{}, false
+		}
+		action.Level = LevelDanger
+	}
+	return action, true
 }
 
 type Session struct {
@@ -92,6 +126,7 @@ type Request struct {
 	TaskID    int64
 	SessionID string
 	Action    string
+	SubAction string
 	ScopeRows int
 	Session   Session
 	Config    Config
@@ -111,24 +146,26 @@ func Evaluate(req Request) (Decision, error) {
 	if !req.Config.Enabled {
 		return Decision{}, ErrDisabled
 	}
-	action, ok := Lookup(req.Action)
+	action, ok := LookupWithAction(req.Action, req.SubAction)
 	if !ok {
 		return Decision{}, fmt.Errorf("%w: %s", ErrUnknownAction, req.Action)
 	}
 	if req.TaskID <= 0 {
 		return Decision{}, ErrTaskRequired
 	}
-	if strings.TrimSpace(req.SessionID) == "" || req.Session.ExternalID != req.SessionID {
-		return Decision{}, ErrSessionRequired
-	}
-	if req.Session.TaskID != req.TaskID || req.Session.BindingID <= 0 || !req.Session.Active {
-		return Decision{}, ErrSessionMismatch
-	}
-	if req.Session.Expired {
-		return Decision{}, ErrSessionInactive
-	}
-	if strings.ToLower(strings.TrimSpace(req.Session.Status)) != "active" {
-		return Decision{}, ErrSessionInactive
+	if !action.SessionOptional {
+		if strings.TrimSpace(req.SessionID) == "" || req.Session.ExternalID != req.SessionID {
+			return Decision{}, ErrSessionRequired
+		}
+		if req.Session.TaskID != req.TaskID || req.Session.BindingID <= 0 || !req.Session.Active {
+			return Decision{}, ErrSessionMismatch
+		}
+		if req.Session.Expired {
+			return Decision{}, ErrSessionInactive
+		}
+		if strings.ToLower(strings.TrimSpace(req.Session.Status)) != "active" {
+			return Decision{}, ErrSessionInactive
+		}
 	}
 	if !req.Config.AllowUnscoped && req.ScopeRows <= 0 {
 		return Decision{}, ErrScopeRequired

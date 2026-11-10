@@ -142,3 +142,31 @@ func TestC2ExplicitReadOnlyEnable(t *testing.T) {
 		t.Fatalf("secret reference = %q", got.APIKeyRef)
 	}
 }
+
+func TestC2EnvironmentOverrides(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"c2":{"enabled":false}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GHOUL_CONFIG", cfgPath)
+	t.Setenv("ARTEX_CONFIG", "")
+	t.Setenv("GHOUL_C2_ENABLED", "true")
+	t.Setenv("GHOUL_C2_BASE_URL", "http://toshell:18081")
+	t.Setenv("GHOUL_C2_CONSOLE_URL", "http://127.0.0.1:18081")
+	t.Setenv("GHOUL_C2_API_KEY_REF", "file:/run/secrets/toshell_api_key")
+	t.Setenv("GHOUL_C2_ALLOWED_HOSTS", "toshell, localhost")
+	t.Setenv("GHOUL_C2_ALLOW_INSECURE_HTTP", "true")
+	t.Setenv("GHOUL_C2_ALLOW_CONFIRM", "true")
+
+	got := Load().EffectiveC2()
+	if !got.Enabled || got.BaseURL != "http://toshell:18081" ||
+		got.ConsoleURL != "http://127.0.0.1:18081" ||
+		got.APIKeyRef != "file:/run/secrets/toshell_api_key" ||
+		!got.AllowInsecureHTTP || !got.AllowConfirm || got.AllowDanger {
+		t.Fatalf("environment overrides = %+v", got)
+	}
+	if len(got.AllowedHosts) != 2 || got.AllowedHosts[1] != "localhost" {
+		t.Fatalf("allowed hosts = %#v", got.AllowedHosts)
+	}
+}

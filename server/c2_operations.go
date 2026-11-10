@@ -13,6 +13,7 @@ import (
 
 	"github.com/Autumn-27/artex/db"
 	toshellapproval "github.com/Autumn-27/artex/integrations/toshell/approval"
+	toshellclient "github.com/Autumn-27/artex/integrations/toshell/client"
 	"github.com/Autumn-27/artex/integrations/toshell/policy"
 	"github.com/Autumn-27/artex/integrations/toshell/sanitize"
 )
@@ -165,6 +166,33 @@ func validateC2Params(tool string, params map[string]any) error {
 				return errors.New("tunnel_id is required for stop")
 			}
 		}
+	case "c2_listener":
+		action := stringParam(params, "action")
+		switch action {
+		case "list":
+		case "create":
+			if stringParam(params, "name") == "" {
+				return errors.New("listener name is required")
+			}
+			if n := intFromAny(params["bind_port"]); n <= 0 || n > 65535 {
+				return errors.New("bind_port must be between 1 and 65535")
+			}
+		case "start", "stop", "delete":
+			if stringParam(params, "listener_id") == "" {
+				return errors.New("listener_id is required")
+			}
+		default:
+			return errors.New("listener action must be list, create, start, stop, or delete")
+		}
+	case "c2_payload":
+		if action := stringParam(params, "action"); action != "" && action != "build" {
+			return errors.New("payload action must be build")
+		}
+		for _, key := range []string{"listener_id", "os", "arch", "format"} {
+			if stringParam(params, key) == "" {
+				return fmt.Errorf("%s is required for payload build", key)
+			}
+		}
 	}
 	return nil
 }
@@ -195,7 +223,7 @@ func (s *c2Service) submitOperation(ctx context.Context, req c2OperationRequest)
 		return nil, policy.ErrDisabled
 	}
 	req.Tool = policy.NormalizeAction(req.Tool)
-	action, ok := policy.Lookup(req.Tool)
+	action, ok := policy.LookupWithAction(req.Tool, req.Action)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", policy.ErrUnknownAction, req.Tool)
 	}
@@ -230,21 +258,31 @@ func (s *c2Service) submitOperation(ctx context.Context, req c2OperationRequest)
 		}
 		return existing, nil
 	}
-	session, err := s.boundSessionForTask(ctx, req.TaskID, req.SessionID)
-	if err != nil {
-		return nil, err
-	}
 	scopeRaw, scopeRows, err := s.pg.TaskScopeSnapshot(ctx, req.TaskID)
 	if err != nil {
 		return nil, err
 	}
-	sessionState := policy.Session{
-		ExternalID: session.ExternalSessionID, Status: session.Status,
-		BindingID: session.Binding.ID, TaskID: session.Binding.TaskID, Active: session.Binding.Active,
-		Expired: session.Binding.ExpiresAt != nil && time.Now().After(*session.Binding.ExpiresAt),
+	var (
+		session      *db.C2Session
+		sessionState policy.Session
+		sessionID    int64
+		bindingID    int64
+	)
+	if !action.SessionOptional {
+		session, err = s.boundSessionForTask(ctx, req.TaskID, req.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		sessionID = session.ID
+		bindingID = session.Binding.ID
+		sessionState = policy.Session{
+			ExternalID: session.ExternalSessionID, Status: session.Status,
+			BindingID: session.Binding.ID, TaskID: session.Binding.TaskID, Active: session.Binding.Active,
+			Expired: session.Binding.ExpiresAt != nil && time.Now().After(*session.Binding.ExpiresAt),
+		}
 	}
 	decision, err := policy.Evaluate(policy.Request{
-		TaskID: req.TaskID, SessionID: req.SessionID, Action: req.Tool,
+		TaskID: req.TaskID, SessionID: req.SessionID, Action: req.Tool, SubAction: req.Action,
 		ScopeRows: scopeRows, Session: sessionState, Config: s.operationPolicyConfig(),
 	})
 	if err != nil {
@@ -265,9 +303,9 @@ func (s *c2Service) submitOperation(ctx context.Context, req c2OperationRequest)
 		status = "approved"
 	}
 	op, err := s.pg.CreateC2Operation(ctx, db.C2OperationInput{
-		InstanceID: s.instanceID, TaskID: req.TaskID, C2SessionID: session.ID,
-		BindingID: session.Binding.ID, Tool: req.Tool, Action: req.Action,
-		Level: string(action.Level), Actor: req.Actor, Source: req.Source,
+		InstanceID: s.instanceID, TaskID: req.TaskID, C2SessionID: sessionID,
+		BindingID: bindingID, Tool: req.Tool, Action: req.Action,
+		Level: string(decision.Action.Level), Actor: req.Actor, Source: req.Source,
 		ParamsJSON: redacted, ExecutionParams: executionParams, ParamsHash: paramsHash, IdempotencyKey: req.IdempotencyKey,
 		Status: status, ApprovalRequired: decision.ApprovalNeeded,
 		ApprovalStages: decision.ApprovalStages, ScopeSnapshot: scopeRaw, ExpiresAt: &expiry,
@@ -284,7 +322,7 @@ func (s *c2Service) submitOperation(ctx context.Context, req c2OperationRequest)
 	for stage := 1; stage <= decision.ApprovalStages; stage++ {
 		claims := toshellapproval.Claims{
 			OperationID: op.ID, Stage: stage, ParamsHash: paramsHash, TaskID: req.TaskID,
-			SessionID: req.SessionID, BindingID: session.Binding.ID, ExpiresUnix: expiry.Unix(),
+			SessionID: req.SessionID, BindingID: bindingID, ExpiresUnix: expiry.Unix(),
 		}
 		token, err := toshellapproval.Sign(s.secret, claims)
 		if err != nil {
@@ -406,10 +444,6 @@ func (s *c2Service) executeOperation(ctx context.Context, operationID int64) (*d
 }
 
 func (s *c2Service) dispatchOperation(ctx context.Context, op *db.C2Operation) (int64, bool, db.C2Evidence, error) {
-	session, err := s.pg.GetC2SessionByExternalID(ctx, s.instanceID, c2SessionIDFromOperation(ctx, s.pg, op))
-	if err != nil || session == nil {
-		return 0, false, db.C2Evidence{}, errors.New("C2 session no longer exists")
-	}
 	var params map[string]any
 	rawParams := op.ExecutionParams
 	if len(rawParams) == 0 {
@@ -419,6 +453,80 @@ func (s *c2Service) dispatchOperation(ctx context.Context, op *db.C2Operation) (
 	action := strings.ToLower(strings.TrimSpace(op.Action))
 	if action == "" {
 		action, _ = params["action"].(string)
+	}
+	switch op.Tool {
+	case "c2_listener":
+		switch action {
+		case "list":
+			items, err := s.client.Listeners(ctx)
+			if err != nil {
+				return 0, false, db.C2Evidence{}, err
+			}
+			raw, _ := json.Marshal(items)
+			return 0, true, db.C2Evidence{
+				Kind: "listener", Title: "Listener list", Content: string(raw),
+				MetadataJSON: json.RawMessage(`{"action":"list"}`),
+			}, nil
+		case "create":
+			req := toshellclient.CreateListenerRequest{
+				Name: stringParam(params, "name"), Type: stringParam(params, "type"),
+				Protocol: stringParam(params, "protocol"), BindAddr: stringParam(params, "bind_addr"),
+				BindPort: intFromAny(params["bind_port"]), PublicAddr: stringParam(params, "public_addr"),
+			}
+			item, err := s.client.CreateListener(ctx, req)
+			if err != nil {
+				return 0, false, db.C2Evidence{}, err
+			}
+			raw, _ := json.Marshal(item)
+			return 0, true, db.C2Evidence{
+				Kind: "listener", Title: "Listener create", Content: string(raw),
+				MetadataJSON: json.RawMessage(`{"action":"create"}`),
+			}, nil
+		case "start", "stop", "delete":
+			id := stringParam(params, "listener_id")
+			var (
+				out any
+				err error
+			)
+			switch action {
+			case "start":
+				out, err = s.client.StartListener(ctx, id)
+			case "stop":
+				out, err = s.client.StopListener(ctx, id)
+			case "delete":
+				out, err = s.client.DeleteListener(ctx, id)
+			}
+			if err != nil {
+				return 0, false, db.C2Evidence{}, err
+			}
+			raw, _ := json.Marshal(out)
+			return 0, true, db.C2Evidence{
+				Kind: "listener", Title: "Listener " + action, Content: string(raw),
+				MetadataJSON: c2MustJSON(map[string]any{"action": action, "listener_id": id}),
+			}, nil
+		default:
+			return 0, false, db.C2Evidence{}, fmt.Errorf("listener action is not allowed: %s", action)
+		}
+	case "c2_payload":
+		if action != "" && action != "build" {
+			return 0, false, db.C2Evidence{}, fmt.Errorf("payload action is not allowed: %s", action)
+		}
+		item, err := s.client.BuildPayload(ctx, params)
+		if err != nil {
+			return 0, false, db.C2Evidence{}, err
+		}
+		raw, _ := json.Marshal(item)
+		return 0, true, db.C2Evidence{
+			Kind: "payload", Title: "Payload build", Content: string(raw),
+			MetadataJSON: c2MustJSON(map[string]any{
+				"build_id": item.ID, "sha256": item.SHA256, "hosted_url": item.HostedURL,
+			}),
+		}, nil
+	}
+
+	session, err := s.pg.GetC2SessionByExternalID(ctx, s.instanceID, c2SessionIDFromOperation(ctx, s.pg, op))
+	if err != nil || session == nil {
+		return 0, false, db.C2Evidence{}, errors.New("C2 session no longer exists")
 	}
 	switch op.Tool {
 	case "c2_recon":
@@ -495,6 +603,11 @@ func (s *c2Service) dispatchOperation(ctx context.Context, op *db.C2Operation) (
 	default:
 		return 0, false, db.C2Evidence{}, fmt.Errorf("unsupported C2 tool: %s", op.Tool)
 	}
+}
+
+func stringParam(params map[string]any, key string) string {
+	value, _ := params[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func (s *c2Service) watchOperationTask(ctx context.Context, operationID, taskID int64) {

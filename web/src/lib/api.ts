@@ -122,6 +122,11 @@ import type {
   VulnIntelStatus,
   WorkspaceFile,
   WorkspaceListing,
+  HostInstallJob,
+  HostenvStatus,
+  PythonPackage,
+  SharedAsset,
+  SharedPublishInput,
 } from "@/lib/types";
 
 function getToken(): string | null {
@@ -517,6 +522,30 @@ export const api = {
     a.remove();
     URL.revokeObjectURL(objUrl);
   },
+
+  // ---- host environment / shared artifact library ----
+  hostenvStatus: () => get<HostenvStatus>("/hostenv/status"),
+  hostenvInstall: (id: string) => post<HostInstallJob>("/hostenv/install", { id }),
+  hostenvInstallBatch: (ids: string[]) =>
+    post<{ started: HostInstallJob[]; skipped: { id: string; reason: string }[] }>("/hostenv/install-batch", { ids }),
+  hostenvJobs: () => get<{ jobs: HostInstallJob[] | null }>("/hostenv/jobs").then((r) => arr(r.jobs)),
+  hostenvJob: (id: string) => get<HostInstallJob>(`/hostenv/jobs/${id}`),
+  hostenvCancel: (id: string) => post<{ ok: boolean }>(`/hostenv/jobs/${id}/cancel`, {}),
+  hostenvSaveProxy: (proxy: string) => put<{ ok: boolean }>("/hostenv/proxy", { proxy }),
+  hostenvProxyCheck: (proxy = "") =>
+    post<{ ok: boolean; error?: string; status?: number; latency_ms?: number }>("/hostenv/proxy-check", { proxy }),
+  sharedAssets: (query = "") => get<{ assets: SharedAsset[] | null }>(`/shared/assets?q=${encodeURIComponent(query)}`).then((r) => arr(r.assets)),
+  sharedAsset: (id: number) => get<SharedAsset>(`/shared/assets/${id}`),
+  sharedPublish: (input: SharedPublishInput) => post<SharedAsset>("/shared/assets", input),
+  sharedStatus: (id: number, status: "published" | "disabled") =>
+    post<{ ok: boolean }>(`/shared/assets/${id}/status`, { status }),
+  sharedPackages: () =>
+    get<{ available: boolean; interpreter: string; packages: PythonPackage[] | null }>("/shared/packages").then((r) => ({
+      ...r,
+      packages: arr(r.packages),
+    })),
+  sharedPackageInstall: (spec: string) => post<HostInstallJob>("/shared/packages/install", { spec }),
+  sharedPackageRemove: (name: string) => del<HostInstallJob>(`/shared/packages?name=${encodeURIComponent(name)}`),
 
   // ---- assets ----
   // Server-side paginated: pass limit/offset, get back the page + full match total.

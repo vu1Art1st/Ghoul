@@ -8,7 +8,7 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 
 🌐 **在线 Demo（模拟数据）**： [https://artex-demo.mhtsec.com](https://artex-demo.mhtsec.com)
 
-📦 **Ghoul 由 ARTEX 演进而来，现为独立仓库：[vu1Art1st/Ghoul](https://github.com/vu1Art1st/Ghoul)。Docker 镜像由本仓库维护为 `mianhuatang11/ghoul`；Docker Hub 拉取失败时，用 `docker compose build` 从源码本地构建，无需任何外部预构建产物。**
+📦 **Ghoul 由 ARTEX 演进而来，现为独立仓库：[vu1Art1st/Ghoul](https://github.com/vu1Art1st/Ghoul)。默认使用本地构建镜像 `ghoul:local`，不依赖 Docker Hub 账号；发布标签会推送到 GHCR `ghcr.io/vu1art1st/ghoul`。**
 
 </div>
 
@@ -79,7 +79,7 @@ cd Ghoul
 
 脚本会：检测 / 自动安装 Docker → 让你选 **① 全部 Docker** 或 **② 本地编译运行**：
 
-- **① 全部 Docker**：填一个 Postgres 密码（可回车随机）→ 自动写 `.env` → `docker compose up -d`。
+- **① 全部 Docker**：填一个 Postgres 密码（可回车随机）→ 自动写 `.env` → 从源码构建 `ghoul:local` → `docker compose up -d`。
 - **② 本地运行**：选数据库（连已有 / 用 Docker 起一个）→ 生成 `config.json` → `go` 编译内嵌单二进制 → 启动。
 
 装好后打开 **http://localhost:8787**（首次进入 `/setup` 设置管理员密码）。
@@ -90,12 +90,12 @@ cd Ghoul
 git clone https://github.com/vu1Art1st/Ghoul.git
 cd Ghoul
 cp .env.example .env          # 填 POSTGRES_PASSWORD、可选 ANTHROPIC_API_KEY
-docker compose up -d          # 拉取 mianhuatang11/ghoul 镜像 + postgres
+docker compose build ghoul && docker compose up -d  # 本地构建 + 启动
 # → http://localhost:8787
 ```
 
-> 镜像现由本仓库自维护为 **`mianhuatang11/ghoul`**。
-> 镜像源不可用（或想自行改代码）时，本地从纯源码构建即可：`docker compose build && docker compose up -d`。
+> 默认镜像名为 **`ghoul:local`**，由本机源码构建，不依赖 Docker Hub 账号。
+> 可在 `.env` 中通过 `GHOUL_IMAGE` 和 `GHOUL_TAG` 修改镜像仓库名与标签。
 > Dockerfile 为多阶段构建（前端静态导出 → Go 静态编译 → 运行镜像），默认走国内友好依赖源，可加 `--build-arg GOPROXY=... / --build-arg NPM_REGISTRY=...` 覆盖。
 
 镜像已含常用工具（ripgrep/curl/vim/npm/nmap…）；`./skills` 与 `./data` 以绑定挂载持久化。
@@ -161,7 +161,7 @@ GHOUL_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 - **随时可回退**：上一版本保留为 `ghoul.old`，卡片上有「回滚到上一版本」。注意数据库结构不会回退。
 - **更新会中断正在运行的任务**——更新即重启，请在空闲时进行。
 - **开发构建不给更新**：版本号是 `dev` 或 `git describe` 带后缀时禁用，避免正式版覆盖掉本地调试的二进制。
-- **Docker 下只换程序、不换镜像**：镜像里的 playwright / nmap 等工具链不会跟着升级，且 `docker compose up -d` 重建容器后会退回镜像自带的版本。要连镜像一起升级仍请用 `docker compose pull ghoul && docker compose up -d ghoul`。
+- **Docker 下只换程序、不换镜像**：镜像里的 playwright / nmap 等工具链不会跟着升级，且 `docker compose up -d` 重建容器后会退回镜像自带的版本。要连镜像一起升级请执行 `docker compose build ghoul && docker compose up -d ghoul`。
 - 访问 GitHub 需要代理时，在同一页面配置**全局代理**即可，更新链路会走它。更新只从 GitHub 域名下载并强制 HTTPS。
 
 ### 方式二：一键更新脚本
@@ -171,19 +171,21 @@ cd Ghoul
 ./update.sh
 ```
 
-脚本先可选 `git pull` 拉取最新代码，再让你选 **① Docker 更新** 或 **② 本地编译更新**（与 `install.sh` 对应）：
+默认执行 `git pull --ff-only` 拉取最新代码，然后本地构建 Docker 镜像并重启服务：
 
-- **① Docker**：可指定目标镜像 tag（回车沿用 `.env` 的 `GHOUL_TAG`，缺省 `latest`；旧 `ARTEX_TAG` 仍兼容）→ `docker compose pull` → `docker compose up -d`（换新镜像重启即自动迁移）。
-- **② 本地**：重建前端静态产物 → 重新编译 `./ghoul`（完成后通过 `./start.sh` 重启生效）。
+- **Docker（默认）**：`git pull --ff-only` → `docker compose build ghoul` → `docker compose up -d ghoul`（启动时自动迁移 schema）。
+- **本地编译**：`./update.sh --local`，重建前端静态产物并重新编译 `./ghoul`（完成后通过 `./start.sh` 重启生效）。
+- **跳过拉取**：`./update.sh --no-pull`，直接用当前工作区代码构建。
+- **指定标签**：`./update.sh --tag v0.3.3`，构建为 `ghoul:v0.3.3`。
 
 ### 方式三：Docker Compose（手动）
 
 ```bash
 cd Ghoul
 git pull                       # 更新 compose / 脚本（可选）
-# 指定版本：在 .env 设 GHOUL_TAG=v0.2.0；不设则用 latest
-docker compose pull ghoul
-docker compose up -d ghoul     # 换新镜像重启 → 自动迁移 schema
+# 指定版本：在 .env 设 GHOUL_TAG=v0.2.0；不设则用 local
+docker compose build ghoul
+docker compose up -d ghoul     # 重启新镜像 → 自动迁移 schema
 docker image prune -f          # 清理旧镜像（可选）
 ```
 
@@ -233,7 +235,7 @@ CGO_ENABLED=0 go build -tags embedui -o ghoul ./cmd/ghoul
 | PostgreSQL DSN | `GHOUL_PG_DSN` | `ARTEX_PG_DSN` |
 | Skill 目录 | `GHOUL_SKILL_DIR` | `ARTEX_SKILL_DIR` |
 | LLM Provider / Model / Base URL / Proxy | `GHOUL_LLM_*` | `ARTEX_LLM_*` |
-| Docker 镜像 tag | `GHOUL_TAG` | `ARTEX_TAG` |
+| Docker 镜像仓库 / tag | `GHOUL_IMAGE` / `GHOUL_TAG` | `ARTEX_TAG` |
 | 通知本地目标开关 | `GHOUL_NOTIFY_ALLOW_LOCAL` | `ARTEX_NOTIFY_ALLOW_LOCAL` |
 | `/btw` 输出上限 | `GHOUL_BTW_MAX_OUTPUT_TOKENS` | `ARTEX_BTW_MAX_OUTPUT_TOKENS` |
 
@@ -278,6 +280,8 @@ server {
 
 Ghoul 将 Toshell 作为唯一 C2 后端，但两者保持独立进程和独立数据库。Phase 0 已冻结 Toshell `v1.4.3`（commit `8bf4643c1affbe109993123475422f6d26897903`）的 REST 契约，不复制 Toshell 源码，也不在 Ghoul 页面中 iframe 嵌入其控制台。
 
+当前集成采用 MCP-first 模式：Compose 自动启动 Toshell sidecar，Ghoul 只接入 Toshell 的只读 MCP 工具；Confirm/Danger 仍通过 Ghoul `c2_*` Adapter、审批中心和证据账本执行。升级 Toshell 只需调整 `TOSHELL_VERSION` 并重建 sidecar，不需要维护源码分支。
+
 ```json
 {
   "c2": {
@@ -294,7 +298,7 @@ Ghoul 将 Toshell 作为唯一 C2 后端，但两者保持独立进程和独立�
 - C2 默认关闭；未知 provider、关闭适配器或未开启 Confirm 时，写入能力会自动收敛为关闭。
 - `api_key_ref` 只能是 secret reference，禁止填写 Toshell API Key 明文。
 - 已保存 `/api/v1/health`、`/api/v1/mcp/tools`、`/api/v1/sessions` 契约快照，并验证 sidecar 健康检查。
-- Toshell 全量 38 个工具估算为 `10,705` tokens（含安全余量 `13,917`）；Ghoul 只暴露 8 个原生 `c2_*` 工具，估算 `955` tokens（含安全余量 `1,242`，预算 `2,000`）。
+- Toshell 全量 38 个工具估算为 `10,705` tokens（含安全余量 `13,917`）；Ghoul 原生面为 10 个 `c2_*` 工具，估算 `1,316` tokens（含安全余量 `1,711`，预算 `2,000`）。只读 MCP 工具通过 skill-gated deferred tools 加载，不把 38 个工具固定注入每轮上下文。
 - Planner 默认只加载 `c2_session_list`、`c2_session_context`、`c2_recon` 三个只读工具。
 - Ghoul UI 负责会话查看/绑定、审批、常用操作和证据；载荷构建、监听器高级配置、插件、AV-Ops、BYOVD/EDR/PPL、驱动和注入保留在 Toshell 控制台。
 

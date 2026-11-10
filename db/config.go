@@ -807,32 +807,35 @@ func (d *DB) ListPromptVersions(agentID int64) ([]PromptVersion, error) {
 // ---------- MCP servers ----------
 
 type MCPServer struct {
-	ID        int64           `json:"id"`
-	Name      string          `json:"name"`
-	Transport string          `json:"transport"`
-	Command   string          `json:"command,omitempty"`
-	Args      json.RawMessage `json:"args"`
-	Env       json.RawMessage `json:"env"`
-	URL       string          `json:"url,omitempty"`
-	Enabled   bool            `json:"enabled"`
-	Insecure  bool            `json:"insecure"` // http: skip TLS cert verification (self-signed servers, issue #108)
-	Tools     []string        `json:"tools,omitempty"` // cached tool names (mcp_tools_cache)
+	ID            int64           `json:"id"`
+	Name          string          `json:"name"`
+	Transport     string          `json:"transport"`
+	Command       string          `json:"command,omitempty"`
+	Args          json.RawMessage `json:"args"`
+	Env           json.RawMessage `json:"env"`
+	URL           string          `json:"url,omitempty"`
+	Enabled       bool            `json:"enabled"`
+	Insecure      bool            `json:"insecure"` // http: skip TLS cert verification (self-signed servers, issue #108)
+	ToolAllowlist []string        `json:"tool_allowlist,omitempty"`
+	Tools         []string        `json:"tools,omitempty"` // cached tool names (mcp_tools_cache)
 }
 
 func (d *DB) ListMCP() ([]*MCPServer, error) {
-	rows, err := d.Query(`SELECT id,name,transport,COALESCE(command,''),args,env,COALESCE(url,''),enabled,insecure FROM mcp_servers ORDER BY id`)
+	rows, err := d.Query(`SELECT id,name,transport,COALESCE(command,''),args,env,COALESCE(url,''),enabled,insecure,
+		COALESCE(tool_allowlist,'[]'::jsonb) FROM mcp_servers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	var out []*MCPServer
 	for rows.Next() {
 		var m MCPServer
-		var args, env []byte
-		if err := rows.Scan(&m.ID, &m.Name, &m.Transport, &m.Command, &args, &env, &m.URL, &m.Enabled, &m.Insecure); err != nil {
+		var args, env, allowlist []byte
+		if err := rows.Scan(&m.ID, &m.Name, &m.Transport, &m.Command, &args, &env, &m.URL, &m.Enabled, &m.Insecure, &allowlist); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		m.Args, m.Env = json.RawMessage(args), json.RawMessage(env)
+		_ = json.Unmarshal(allowlist, &m.ToolAllowlist)
 		out = append(out, &m)
 	}
 	if err := rows.Err(); err != nil {
@@ -910,20 +913,29 @@ ON CONFLICT (server_id, tool_name) DO UPDATE SET description=EXCLUDED.descriptio
 
 func (d *DB) SaveMCP(m *MCPServer) (int64, error) {
 	args, env := string(m.Args), string(m.Env)
+	allowlist, err := json.Marshal(m.ToolAllowlist)
+	if err != nil {
+		return 0, err
+	}
 	if args == "" {
 		args = "[]"
 	}
 	if env == "" {
 		env = "{}"
 	}
+	if len(m.ToolAllowlist) == 0 {
+		allowlist = []byte("[]")
+	}
 	if m.ID == 0 {
 		var id int64
-		err := d.QueryRow(`INSERT INTO mcp_servers(name,transport,command,args,env,url,enabled,insecure) VALUES ($1,$2,NULLIF($3,''),$4,$5,NULLIF($6,''),$7,$8) RETURNING id`,
-			m.Name, m.Transport, m.Command, args, env, m.URL, m.Enabled, m.Insecure).Scan(&id)
+		err := d.QueryRow(`INSERT INTO mcp_servers(name,transport,command,args,env,url,enabled,insecure,tool_allowlist)
+			VALUES ($1,$2,NULLIF($3,''),$4,$5,NULLIF($6,''),$7,$8,$9) RETURNING id`,
+			m.Name, m.Transport, m.Command, args, env, m.URL, m.Enabled, m.Insecure, string(allowlist)).Scan(&id)
 		return id, err
 	}
-	_, err := d.Exec(`UPDATE mcp_servers SET name=$1,transport=$2,command=NULLIF($3,''),args=$4,env=$5,url=NULLIF($6,''),enabled=$7,insecure=$8 WHERE id=$9`,
-		m.Name, m.Transport, m.Command, args, env, m.URL, m.Enabled, m.Insecure, m.ID)
+	_, err = d.Exec(`UPDATE mcp_servers SET name=$1,transport=$2,command=NULLIF($3,''),args=$4,env=$5,
+		url=NULLIF($6,''),enabled=$7,insecure=$8,tool_allowlist=$9 WHERE id=$10`,
+		m.Name, m.Transport, m.Command, args, env, m.URL, m.Enabled, m.Insecure, string(allowlist), m.ID)
 	return m.ID, err
 }
 

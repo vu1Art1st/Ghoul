@@ -14,10 +14,10 @@
     "estimated_tokens_with_safety": 13917
   },
   "ghoul_native_surface": {
-    "tool_count": 8,
-    "json_bytes": 3508,
-    "estimated_tokens": 955,
-    "estimated_tokens_with_safety": 1242
+    "tool_count": 10,
+    "json_bytes": 4909,
+    "estimated_tokens": 1316,
+    "estimated_tokens_with_safety": 1711
   },
   "schema_token_budget": 2000,
   "output_token_budget": 4000,

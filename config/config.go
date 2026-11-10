@@ -35,6 +35,7 @@ type C2Config struct {
 	Enabled                bool     `json:"enabled"`
 	Provider               string   `json:"provider"`
 	BaseURL                string   `json:"base_url"`
+	ConsoleURL             string   `json:"console_url"`
 	APIKeyRef              string   `json:"api_key_ref"`
 	AllowConfirm           bool     `json:"allow_confirm"`
 	AllowDanger            bool     `json:"allow_danger"`
@@ -128,10 +129,68 @@ func Load() Config {
 	var c Config
 	b, err := os.ReadFile(Path())
 	if err != nil {
+		applyC2Env(&c.C2)
 		return c
 	}
 	_ = json.Unmarshal(b, &c)
+	applyC2Env(&c.C2)
 	return c
+}
+
+// applyC2Env lets container deployments inject the sidecar endpoint and secret
+// reference without writing environment-specific values into config.json.
+func applyC2Env(c2 *C2Config) {
+	if v := strings.TrimSpace(os.Getenv("GHOUL_C2_ENABLED")); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			c2.Enabled = parsed
+		}
+	}
+	if v := strings.TrimSpace(envcompat.Get("GHOUL_C2_PROVIDER", "ARTEX_C2_PROVIDER")); v != "" {
+		c2.Provider = v
+	}
+	if v := strings.TrimSpace(envcompat.Get("GHOUL_C2_BASE_URL", "ARTEX_C2_BASE_URL")); v != "" {
+		c2.BaseURL = v
+	}
+	if v := strings.TrimSpace(envcompat.Get("GHOUL_C2_CONSOLE_URL", "ARTEX_C2_CONSOLE_URL")); v != "" {
+		c2.ConsoleURL = v
+	}
+	if v := strings.TrimSpace(envcompat.Get("GHOUL_C2_API_KEY_REF", "ARTEX_C2_API_KEY_REF")); v != "" {
+		c2.APIKeyRef = v
+	}
+	if v := strings.TrimSpace(os.Getenv("GHOUL_C2_ALLOW_CONFIRM")); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			c2.AllowConfirm = parsed
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("GHOUL_C2_ALLOW_DANGER")); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			c2.AllowDanger = parsed
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("GHOUL_C2_ALLOW_TUNNEL")); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			c2.AllowTunnel = parsed
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("GHOUL_C2_ALLOW_INSECURE_HTTP")); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			c2.AllowInsecureHTTP = parsed
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("GHOUL_C2_ALLOWED_HOSTS")); v != "" {
+		c2.AllowedHosts = splitCSV(v)
+	}
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // EffectiveC2 applies fail-closed defaults. In particular, a missing provider

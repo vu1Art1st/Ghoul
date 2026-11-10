@@ -22,6 +22,7 @@ import type {
   FindingTrafficBinding,
   IntentAsset,
   ScopeRow,
+  SharedAsset,
   Task,
   TaskArchive,
   TaskAssetMutation,
@@ -220,6 +221,20 @@ type MockTaskAssetSource = Pick<Asset, "task_source" | "task_source_summary" | "
 const mockTaskAssetSources = new Map<string, MockTaskAssetSource>();
 let nextMockTaskAssetID = D.tasks.length + 1;
 let mockActiveTask = D.ACTIVE_TASK;
+const mockSharedAssets: SharedAsset[] = [
+  {
+    id: 1, name: "captcha-recognizer", kind: "tool" as const, description: "通用验证码识别入口，使用共享 ddddocr 运行时。",
+    tags: ["验证码", "OCR"], language: "python", entrypoint: "recognize.py",
+    usage: "$GHOUL_PYTHON recognize.py captcha.png", dependencies: ["ddddocr"], current_version: 2,
+    status: "published" as const, source_task_id: 4, source_intent_id: 12,
+    created_at: "2026-11-09T08:00:00Z", updated_at: "2026-11-10T08:00:00Z",
+  },
+];
+let mockSharedSequence = 2;
+const mockInstallJobs = [
+  { id: "demo-install-1", kind: "python-package", target: "ddddocr==1.5.6", state: "done", exit_code: 0, error: "", log: "[ok] 安装完成\n", created_at: "2026-11-10T08:00:00Z" },
+];
+let mockInstallSequence = 2;
 
 function mockTaskAssetSourceKey(taskID: string, assetID: number): string {
   return JSON.stringify([taskID, assetID]);
@@ -1613,6 +1628,36 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   // ── 工作空间文件管理器（demo：静态示例树；写/建/删走下方写兜底 {ok:true}）──
   if (path === "/workspace/list") return D.workspaceList(q.get("path") ?? "");
   if (path === "/workspace/read") return D.workspaceRead(q.get("path") ?? "");
+  if (path === "/hostenv/status") return {
+    deploy_mode: "docker", os: "linux", arch: "amd64",
+    tools: [
+      { id: "nmap", name: "nmap", purpose: "端口扫描与服务指纹", category: "network", kind: "apt", available: true, path: "/usr/bin/nmap", installable: true },
+      { id: "nuclei", name: "nuclei", purpose: "基于模板的漏洞扫描", category: "web", kind: "github", available: true, path: "/usr/local/bin/nuclei", installable: true },
+      { id: "ddddocr", name: "ddddocr", purpose: "验证码识别 Python 库", category: "runtime", kind: "python", available: true, path: "/app/data/shared/python/venv/bin/python", installable: true },
+      { id: "sqlmap", name: "sqlmap", purpose: "SQL 注入检测", category: "web", kind: "apt", available: false, installable: true },
+    ],
+    python: { available: true, interpreter: "/app/data/shared/python/venv/bin/python", packages: [{ name: "ddddocr", version: "1.5.6" }, { name: "requests", version: "2.32.5" }] },
+    installer: { available: true, privileged_helper: false, proxy: "" },
+  };
+  if (path === "/hostenv/jobs") return { jobs: mockInstallJobs };
+  if (path.startsWith("/hostenv/jobs/") && m === "GET") return mockInstallJobs[0];
+  if (path === "/shared/assets" && m === "GET") {
+    const query = (q.get("q") ?? "").toLowerCase();
+    return { assets: mockSharedAssets.filter((a) => !query || `${a.name} ${a.description} ${a.tags.join(" ")}`.toLowerCase().includes(query)) };
+  }
+  if (path === "/shared/assets" && m === "POST") {
+    const input = b as { name: string; kind: "script" | "tool" | "library"; description: string; tags: string[]; language: string; entrypoint: string; usage: string; dependencies: string[]; source_path: string };
+    const asset = { ...input, id: mockSharedSequence++, current_version: 1, status: "published" as const, source_task_id: 0, source_intent_id: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    mockSharedAssets.unshift(asset);
+    return asset;
+  }
+  if (path === "/shared/packages") return { available: true, interpreter: "/app/data/shared/python/venv/bin/python", packages: [{ name: "ddddocr", version: "1.5.6" }, { name: "requests", version: "2.32.5" }] };
+  if (path === "/shared/packages/install" || path === "/hostenv/install" || path === "/hostenv/install-batch") {
+    const input = b as { spec?: string; id?: string; ids?: string[] };
+    const job = { id: `demo-install-${mockInstallSequence++}`, kind: path.includes("packages") ? "python-package" : "tool", target: input.spec ?? input.id ?? input.ids?.[0] ?? "", state: "queued", error: "", exit_code: 0, log: "", created_at: new Date().toISOString() };
+    mockInstallJobs.unshift(job);
+    return job;
+  }
 
   // ── stats ──
   if (path === "/stats") {

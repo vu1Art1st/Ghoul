@@ -96,6 +96,13 @@ func BuiltinToolSeeds() []ToolSeed {
 			Agents: agents,
 		})
 	}
+	for _, tool := range SharedTools(nil) {
+		agents := []string{"planner", "mainagent", "auto", "worker", "pentest"}
+		if tool.Name() == "shared_materialize" {
+			agents = []string{"worker", "pentest", "auto"}
+		}
+		out = append(out, ToolSeed{Key: tool.Name(), Desc: tool.Description(), Schema: tool.InputSchema(), Agents: agents})
+	}
 	return out
 }
 

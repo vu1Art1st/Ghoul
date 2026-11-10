@@ -1,0 +1,47 @@
+# syntax=docker/dockerfile:1
+#
+# Toshell runtime image. The source is NOT vendored into Ghoul; the build pulls
+# one pinned release archive and verifies the upstream checksums.txt.
+FROM golang:1.26-bookworm AS gotoolchain
+
+FROM debian:bookworm-slim
+
+ARG TARGETARCH=amd64
+ARG TOSHELL_VERSION=v1.4.3
+ARG TOSHELL_REPO=iQingshan/Toshell
+ARG TOSHELL_RELEASE_BASE=https://github.com/iQingshan/Toshell/releases/download
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl unzip gettext-base git \
+      gcc-mingw-w64-x86-64 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=gotoolchain /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}" \
+    GOTOOLCHAIN=auto
+
+RUN --mount=type=cache,target=/var/cache/toshell \
+    set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) asset="toshell-server-linux-amd64.zip" ;; \
+      arm64) asset="toshell-server-linux-arm64.zip" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    base="${TOSHELL_RELEASE_BASE}/${TOSHELL_VERSION}"; \
+    cache=/var/cache/toshell; \
+    mkdir -p "$cache"; \
+    [ -s "$cache/$asset" ] || curl -fsSL "${base}/${asset}" -o "$cache/$asset"; \
+    [ -s "$cache/checksums.txt" ] || curl -fsSL "${base}/checksums.txt" -o "$cache/checksums.txt"; \
+    cd "$cache"; \
+    grep "  ${asset}$" checksums.txt | sha256sum -c -; \
+    mkdir -p /opt/toshell; \
+    unzip -q "$cache/$asset" -d /opt/toshell; \
+    chmod +x /opt/toshell/toserver
+
+COPY toshell/server.yaml.template /opt/toshell/server.yaml.template
+COPY toshell/entrypoint.sh /usr/local/bin/toshell-entrypoint
+RUN chmod +x /usr/local/bin/toshell-entrypoint
+
+WORKDIR /opt/toshell
+EXPOSE 18081 18082 8080 8081
+ENTRYPOINT ["/usr/local/bin/toshell-entrypoint"]
