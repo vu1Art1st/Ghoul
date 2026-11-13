@@ -115,6 +115,9 @@ func TestTaskAssetAttachDetachPreservesGlobalAssetAndAnchors(t *testing.T) {
 	if err != nil || len(assets) != 1 {
 		t.Fatalf("task assets=%+v err=%v", assets, err)
 	}
+	if ids, err := d.Assets().TaskAssetIDs(task.ID); err != nil || len(ids) != 1 || ids[0] != assetID {
+		t.Fatalf("report task asset ids=%v err=%v", ids, err)
+	}
 	if assets[0].TaskSource != "manual" || assets[0].TaskSourceSummary != "授权资产清单第 3 项" {
 		t.Fatalf("unexpected provenance: %+v", assets[0])
 	}
@@ -129,6 +132,9 @@ func TestTaskAssetAttachDetachPreservesGlobalAssetAndAnchors(t *testing.T) {
 	}
 	if assets, err := d.Assets().QueryByTask(task.ID, "", 10, 0); err != nil || len(assets) != 0 {
 		t.Fatalf("detached task assets=%+v err=%v", assets, err)
+	}
+	if ids, err := d.Assets().TaskAssetIDs(task.ID); err != nil || len(ids) != 0 {
+		t.Fatalf("detached report task asset ids=%v err=%v", ids, err)
 	}
 	var global, anchors, links int
 	_ = d.QueryRow(`SELECT count(*) FROM assets WHERE id=$1`, assetID).Scan(&global)

@@ -2,7 +2,15 @@
 
 import * as React from "react";
 
-import { CpuIcon, FlaskConicalIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon } from "lucide-react";
+import {
+  CpuIcon,
+  FlaskConicalIcon,
+  GitMergeIcon,
+  KeyboardIcon,
+  RadioTowerIcon,
+  SearchIcon,
+  ShieldAlertIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -21,6 +29,7 @@ import { BasicAuthCard } from "./_components/basic-auth-card";
 export default function SystemSettingsPage() {
   const [trafficCapture, setTrafficCapture] = React.useState(false);
   const [agentTrafficBinding, setAgentTrafficBinding] = React.useState(false);
+  const [findingAutoMerge, setFindingAutoMerge] = React.useState(false);
   const [webSearch, setWebSearch] = React.useState(false);
   const [backend, setBackend] = React.useState("ddgs");
   const [braveKeySet, setBraveKeySet] = React.useState(false);
@@ -58,6 +67,7 @@ export default function SystemSettingsPage() {
   const apply = React.useCallback((s: Settings) => {
     setTrafficCapture(!!s.traffic_capture);
     setAgentTrafficBinding(!!s.agent_traffic_binding);
+    setFindingAutoMerge(!!s.finding_auto_merge_enabled);
     setWebSearch(!!s.web_search_enabled);
     setBackend(s.web_search_backend || "ddgs");
     setBraveKeySet(!!s.brave_key_set);
@@ -172,6 +182,22 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => {
         setAgentTrafficBinding(!v);
+        toast.error(`保存失败：${(e as Error).message}`);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const toggleFindingAutoMerge = (v: boolean) => {
+    setFindingAutoMerge(v);
+    setSaving(true);
+    api
+      .setSettings({ finding_auto_merge_enabled: v })
+      .then((s) => {
+        apply(s);
+        toast.success(v ? "已开启任务完成后自动归并" : "已关闭任务完成后自动归并");
+      })
+      .catch((e) => {
+        setFindingAutoMerge(!v);
         toast.error(`保存失败：${(e as Error).message}`);
       })
       .finally(() => setSaving(false));
@@ -349,6 +375,33 @@ export default function SystemSettingsPage() {
               checked={trafficCapture}
               disabled={!loaded || saving}
               onCheckedChange={toggleTraffic}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <GitMergeIcon className="size-4" />
+              任务完成后自动归并
+            </CardTitle>
+            <CardDescription id="finding-auto-merge-description">
+              任务完成且产生至少两条有效 Finding 时，系统自动复用漏洞归并 Agent 生成同源漏洞组和统一报告。
+              人工归并、人工调整或移出过的漏洞组会被锁定，自动流程不会覆盖。
+              <br />
+              自动归并失败不会影响任务报告和 Word 导出，仍会基于当前已归并结果与未归并 Finding 生成。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex items-center justify-between gap-4">
+            <Label htmlFor="finding-auto-merge" className="text-sm font-normal text-muted-foreground">
+              {findingAutoMerge ? "已开启 · 任务完成后自动执行" : "已关闭 · 仅保留手动归并"}
+            </Label>
+            <Switch
+              id="finding-auto-merge"
+              aria-describedby="finding-auto-merge-description"
+              checked={findingAutoMerge}
+              disabled={!loaded || saving}
+              onCheckedChange={toggleFindingAutoMerge}
             />
           </CardContent>
         </Card>

@@ -205,6 +205,19 @@ func (d *Docx) Kai2(text string) {
 	d.buf.WriteString(fmt.Sprintf(`<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, esc(text)))
 }
 
+// bodyHeading renders a heading inside a model-authored finding report. These
+// styles deliberately have no outline level, so report-internal headings do not
+// pollute the report's table of contents.
+func (d *Docx) bodyHeading(text string, level int) {
+	if level < 1 {
+		level = 1
+	}
+	if level > 3 {
+		level = 3
+	}
+	fmt.Fprintf(&d.buf, `<w:p><w:pPr><w:pStyle w:val="BodyHeading%d"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, level, esc(text))
+}
+
 // Bullet 无序列表项。
 func (d *Docx) Bullet(text string) {
 	// ind firstLine=0：清 Normal 的公文首行缩进，缩进交给 numbering 定义
@@ -219,27 +232,28 @@ func (d *Docx) Table(header []string, rows [][]string) {
 // TableFills 带行底色的表格：fills[i] 是第 i 行数据的底色 hex（空串或越界 = 无底色）。
 // 严重度分布表按严重度着色用（A2）。
 func (d *Docx) TableFills(header []string, rows [][]string, fills []string) {
+	widths := tableColumnWidths(header, rows)
 	var b strings.Builder
-	b.WriteString(`<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid>`)
-	for range header {
-		b.WriteString(`<w:gridCol w:w="1800"/>`)
+	b.WriteString(`<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="8845" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>`)
+	for _, width := range widths {
+		fmt.Fprintf(&b, `<w:gridCol w:w="%d"/>`, width)
 	}
 	b.WriteString(`</w:tblGrid>`)
 	// 单元格文字 10pt：正文字号升到三号后，表格若继承会巨大变形
-	cell := func(text, fill string) {
+	cell := func(text, fill string, width int) {
 		sty := ""
 		if fill != "" {
 			sty = fmt.Sprintf(`<w:shd w:val="clear" w:fill="%s"/>`, fill)
 		}
-		fmt.Fprintf(&b, `<w:tc><w:tcPr>%s</w:tcPr><w:p><w:pPr><w:spacing w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/></w:pPr><w:r><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:tc>`, sty, esc(text))
+		fmt.Fprintf(&b, `<w:tc><w:tcPr><w:tcW w:w="%d" w:type="dxa"/>%s<w:tcMar><w:top w:w="60" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tcMar><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:spacing w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/></w:pPr><w:r><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:tc>`, width, sty, esc(text))
 	}
-	b.WriteString(`<w:tr>`)
-	for _, h := range header {
-		cell(h, "DEEAF6")
+	b.WriteString(`<w:tr><w:trPr><w:tblHeader/></w:trPr>`)
+	for i, h := range header {
+		cell(h, "DEEAF6", widths[i])
 	}
 	b.WriteString(`</w:tr>`)
 	for ri, r := range rows {
-		b.WriteString(`<w:tr>`)
+		b.WriteString(`<w:tr><w:trPr><w:cantSplit/></w:trPr>`)
 		fill := ""
 		if ri < len(fills) {
 			fill = fills[ri]
@@ -249,7 +263,7 @@ func (d *Docx) TableFills(header []string, rows [][]string, fills []string) {
 			if i < len(r) {
 				v = r[i]
 			}
-			cell(v, fill)
+			cell(v, fill, widths[i])
 		}
 		b.WriteString(`</w:tr>`)
 	}
@@ -257,6 +271,62 @@ func (d *Docx) TableFills(header []string, rows [][]string, fills []string) {
 	// OOXML 要求表格后跟一个空段落
 	b.WriteString(`<w:p/>`)
 	d.buf.WriteString(b.String())
+}
+
+func tableColumnWidths(header []string, rows [][]string) []int {
+	const (
+		totalWidth = 8845
+		minWidth   = 620
+	)
+	if len(header) == 0 {
+		return nil
+	}
+	weights := make([]int, len(header))
+	for i, value := range header {
+		weights[i] = columnWeight(value)
+	}
+	for _, row := range rows {
+		for i := range header {
+			if i < len(row) {
+				if weight := columnWeight(row[i]); weight > weights[i] {
+					weights[i] = weight
+				}
+			}
+		}
+	}
+	totalWeight := 0
+	for _, weight := range weights {
+		totalWeight += weight
+	}
+	widths := make([]int, len(header))
+	remaining := totalWidth - minWidth*len(header)
+	used := 0
+	for i, weight := range weights {
+		extra := 0
+		if totalWeight > 0 {
+			extra = remaining * weight / totalWeight
+		}
+		widths[i] = minWidth + extra
+		used += widths[i]
+	}
+	widths[len(widths)-1] += totalWidth - used
+	return widths
+}
+
+func columnWeight(value string) int {
+	runes := len([]rune(strings.TrimSpace(value)))
+	switch {
+	case runes <= 2:
+		return 3
+	case runes <= 8:
+		return 8
+	case runes <= 24:
+		return 18
+	case runes <= 48:
+		return 32
+	default:
+		return 48
+	}
 }
 
 // PageBreak 分页。
@@ -490,7 +560,7 @@ func numbering() string {
 <w:multiLevelType w:val="hybridMultilevel"/>
 <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="&#8226;"/><w:lvlJc w:val="left"/>
 <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol" w:hint="default"/></w:rPr></w:lvl>
+<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:hint="default"/></w:rPr></w:lvl>
 <w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="o"/><w:lvlJc w:val="left"/>
 <w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr></w:lvl>
 <w:lvl w:ilvl="2"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="&#61623;"/><w:lvlJc w:val="left"/>
@@ -516,16 +586,25 @@ const docxStyles = `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordpro
 <w:pPr><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/>
 <w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="0"/><w:spacing w:before="120" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:pPr><w:keepNext/><w:outlineLvl w:val="0"/><w:spacing w:before="120" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
 <w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="1"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:pPr><w:keepNext/><w:outlineLvl w:val="1"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
 <w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="楷体_GB2312"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="2"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:pPr><w:keepNext/><w:outlineLvl w:val="2"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
 <w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="3"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:pPr><w:keepNext/><w:outlineLvl w:val="3"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="BodyHeading1" w:customStyle="1"><w:name w:val="Body Heading 1"/><w:basedOn w:val="Normal"/>
+<w:pPr><w:keepNext/><w:spacing w:before="160" w:after="40" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/><w:jc w:val="left"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="30"/><w:szCs w:val="30"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="BodyHeading2" w:customStyle="1"><w:name w:val="Body Heading 2"/><w:basedOn w:val="Normal"/>
+<w:pPr><w:keepNext/><w:spacing w:before="120" w:after="20" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/><w:jc w:val="left"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="楷体_GB2312"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="BodyHeading3" w:customStyle="1"><w:name w:val="Body Heading 3"/><w:basedOn w:val="Normal"/>
+<w:pPr><w:keepNext/><w:spacing w:before="80" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/><w:jc w:val="left"/></w:pPr>
 <w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/>
 <w:pPr><w:spacing w:before="60" w:after="60" w:line="240" w:lineRule="auto"/>
@@ -591,5 +670,8 @@ func SeverityCN(s string) string {
 
 // FormatTimeUTC 统一时间展示(UTC,报告里避免时区歧义)。
 func FormatTimeUTC(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
 	return t.UTC().Format("2006-01-02 15:04 UTC")
 }

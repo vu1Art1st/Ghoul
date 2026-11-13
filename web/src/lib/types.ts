@@ -379,6 +379,9 @@ export interface HostInstallJob {
   exit_code: number;
   error?: string;
   log: string;
+  runtime_id?: number;
+  language?: string;
+  resolved_version?: string;
   created_at: string;
   started_at?: string;
   ended_at?: string;
@@ -392,6 +395,13 @@ export interface HostenvStatus {
   python: {
     available: boolean;
     interpreter: string;
+    manager?: string;
+    uv?: string;
+    mise?: string;
+    system_python?: string;
+    venvs_root?: string;
+    uv_root?: string;
+    mise_root?: string;
     packages: PythonPackage[];
   };
   installer: {
@@ -401,16 +411,38 @@ export interface HostenvStatus {
   };
 }
 
+export interface RuntimeDoctor {
+  task_runtime: {
+    shared_dir: string;
+    venv_python?: string;
+    python?: string;
+    python_source: "shared" | "uv" | "system" | "missing";
+    uv?: string;
+    mise?: string;
+    java?: string;
+    java_home?: string;
+    node?: string;
+    fallback: boolean;
+    warning?: string;
+  };
+  shared_python: HostenvStatus["python"];
+  tools: HostTool[];
+}
+
 export interface SharedAsset {
   id: number;
   name: string;
-  kind: "script" | "tool" | "library";
+  display_name: string;
+  kind: "script" | "tool" | "library" | "skill" | "template" | "ctf_report";
   description: string;
   tags: string[];
   language: string;
   entrypoint: string;
   usage: string;
   dependencies: string[];
+  runtime_id?: number;
+  runtime_spec?: string;
+  healthcheck: Record<string, unknown>;
   current_version: number;
   status: "pending_review" | "published" | "disabled" | "archived";
   source_task_id: number;
@@ -419,8 +451,48 @@ export interface SharedAsset {
   updated_at: string;
 }
 
+export interface PocRecord {
+  id: number;
+  name: string;
+  scope_type: "target" | "product" | "component" | "ctf";
+  target_key?: string;
+  vendor?: string;
+  product?: string;
+  component?: string;
+  affected_versions?: string;
+  fingerprint?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  cve_ids?: string[];
+  cwe_ids?: string[];
+  exploit_method?: string;
+  prerequisites?: string;
+  impact?: string;
+  validation_status: "draft" | "reproduced" | "verified" | "stale" | "retired";
+  confidence: string;
+  source_task_id?: number;
+  source_intent_id?: number;
+  finding_id?: number;
+  asset_ids?: number[];
+  artifact_asset_id?: number;
+  artifact_version: number;
+  last_verified_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskRelationSuggestion {
+  task_id: number;
+  name?: string;
+  status: string;
+  goal?: string;
+  reason: string;
+  confidence: number;
+  updated_at: string;
+}
+
 export interface SharedPublishInput {
   name: string;
+  display_name: string;
   kind: SharedAsset["kind"];
   description: string;
   tags: string[];
@@ -428,10 +500,60 @@ export interface SharedPublishInput {
   entrypoint: string;
   usage: string;
   dependencies: string[];
+  runtime_id?: number;
+  runtime_spec?: string;
+  healthcheck?: Record<string, unknown>;
   source_path: string;
   source_task_id?: number;
   source_intent_id?: number;
   asset_id?: number;
+}
+
+export interface SharedAssetVersion {
+  id: number;
+  asset_id: number;
+  version: number;
+  source_path: string;
+  content_hash: string;
+  validation: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface SharedAssetFileEntry {
+  name: string;
+  path: string;
+  dir: boolean;
+  size: number;
+  modified_at: string;
+}
+
+export interface SharedAssetFile {
+  path: string;
+  size: number;
+  binary: boolean;
+  too_large: boolean;
+  content?: string;
+  modified_at: string;
+}
+
+export interface SharedAssetMetaPatch {
+  display_name?: string;
+  description?: string;
+  tags?: string[];
+  language?: string;
+  usage?: string;
+  dependencies?: string[];
+  runtime_spec?: string;
+  expected_updated_at?: string;
+}
+
+export interface SharedAssetEvent {
+  id: number;
+  asset_id: number;
+  action: string;
+  actor: string;
+  detail: Record<string, unknown>;
+  created_at: string;
 }
 
 // 任务测试范围的一条（覆盖度分母 + 授权边界）。
@@ -648,11 +770,16 @@ export interface FindingCase {
   task_id?: string;
   title: string;
   reason: string;
+  root_cause_key?: string;
   severity: Severity | "";
   severity_reason: string;
   report?: string;
   version: number;
   report_version: number;
+  report_source_version: number;
+  report_stale: boolean;
+  managed_by: "auto" | "manual";
+  locked: boolean;
   active: boolean;
   count: number;
   critical: number;
@@ -691,7 +818,9 @@ export interface FindingMergeJob {
   case_ids: number[];
   ungrouped_finding_ids: number[];
   group_count: number;
-  mode: "cluster" | "regenerate";
+  mode: "cluster" | "regenerate" | "auto";
+  input_hash?: string;
+  attempts: number;
   status: "queued" | "clustering" | "reporting" | "saving" | "running" | "succeeded" | "failed";
   error?: string;
   created_at: string;
@@ -1097,6 +1226,7 @@ export interface TrafficHost {
 export interface Settings {
   traffic_capture: boolean;
   agent_traffic_binding: boolean; // Agent 自动绑定流量证据，默认关闭；不影响人工绑定
+  finding_auto_merge_enabled?: boolean; // 任务完成后自动复用漏洞归并 Agent
   llm_record: boolean; // LLM 录制开关（默认关）；关闭时不记录任何 LLM 调用
   // Web search. brave_key_set / tavily_key_set reflect whether a key is stored
   // (the values are never returned). On PUT, send the corresponding field to set/clear.

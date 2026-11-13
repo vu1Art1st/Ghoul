@@ -24,25 +24,28 @@ type DBFinding struct {
 	CounterEvidence       json.RawMessage
 	PivotHints            json.RawMessage
 
-	ID              int64
-	TaskID          *int64
-	NodeID          *int64
-	VulnClass       string
-	Name            string // 漏洞名称(可读标题);为空时前端回退展示 VulnClass
-	Severity        string
-	Summary         string
-	Evidence        string
-	Worker          string
-	AssetIDs        []int64
-	Status          string
-	Report          string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
-	Fingerprint     string
-	EvidenceGrade   string
-	CaseID          int64
-	CaseTitle       string
-	CaseSeverity    string
-	CaseReason      string
-	CaseCount       int
+	ID            int64
+	TaskID        *int64
+	NodeID        *int64
+	VulnClass     string
+	Name          string // 漏洞名称(可读标题);为空时前端回退展示 VulnClass
+	Severity      string
+	Summary       string
+	Evidence      string
+	Worker        string
+	AssetIDs      []int64
+	Status        string
+	Report        string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
+	Fingerprint   string
+	EvidenceGrade string
+	CaseID        int64
+	CaseTitle     string
+	CaseSeverity  string
+	CaseReason    string
+	CaseCount     int
+	// FindingCount is populated for synthetic finding-case views and records how
+	// many raw findings the displayed case represents.
+	FindingCount    int `json:"-"`
 	CreatedAt       time.Time
 	TaskDescription string // populated via LEFT JOIN on tasks
 }

@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   GitMerge,
   Loader2,
+  Plus,
   RefreshCw,
   Save,
   Sparkles,
@@ -54,6 +55,8 @@ export default function FindingCasesPage() {
   const [findingsLoading, setFindingsLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [selectedFindings, setSelectedFindings] = React.useState<Finding[]>([]);
+  const [addMemberIds, setAddMemberIds] = React.useState<string[]>([]);
+  const [autoJob, setAutoJob] = React.useState<FindingMergeJob | null>(null);
   const [report, setReport] = React.useState("");
   const [severity, setSeverity] = React.useState<Severity>("high");
   const [severityReason, setSeverityReason] = React.useState("");
@@ -63,6 +66,7 @@ export default function FindingCasesPage() {
     [selectedFindings],
   );
   const selectableFindings = React.useMemo(() => taskFindings.filter((finding) => !finding.case_id), [taskFindings]);
+  const addableFindings = React.useMemo(() => taskFindings.filter((finding) => !finding.case_id), [taskFindings]);
   const allSelectableSelected =
     selectableFindings.length > 0 &&
     selectableFindings.every((finding) => selectedFindingIds.includes(findingKey(finding)));
@@ -76,6 +80,19 @@ export default function FindingCasesPage() {
       toast.error(`加载漏洞组失败: ${error}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadAutoJob() {
+    if (!taskId) {
+      setAutoJob(null);
+      return;
+    }
+    try {
+      const result = await api.latestAutoFindingMergeJob(taskId);
+      setAutoJob(result.job);
+    } catch {
+      setAutoJob(null);
     }
   }
 
@@ -122,6 +139,14 @@ export default function FindingCasesPage() {
   React.useEffect(() => {
     void loadCases();
     void loadTaskFindings();
+    void loadAutoJob();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId]);
+
+  React.useEffect(() => {
+    if (!taskId) return;
+    const timer = window.setInterval(() => void loadAutoJob(), 5000);
+    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
@@ -129,6 +154,7 @@ export default function FindingCasesPage() {
     try {
       const detail = await api.findingCase(item.id);
       setSelected(detail);
+      setAddMemberIds([]);
       setReport(detail.case.report ?? item.report ?? "");
       setSeverity((detail.case.severity || item.severity || "high") as Severity);
       setSeverityReason(detail.case.severity_reason || item.severity_reason || "");
@@ -151,6 +177,13 @@ export default function FindingCasesPage() {
     setSelectedFindings(checked ? taskFindings.filter((finding) => !finding.case_id) : []);
   }
 
+  function toggleAddMember(finding: Finding, checked: boolean) {
+    const key = findingKey(finding);
+    setAddMemberIds((current) =>
+      checked ? (current.includes(key) ? current : [...current, key]) : current.filter((id) => id !== key),
+    );
+  }
+
   async function waitForMergeJob(jobId: string): Promise<FindingMergeJob> {
     for (let attempt = 0; attempt < 600; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
@@ -170,12 +203,15 @@ export default function FindingCasesPage() {
     try {
       const job = await api.createFindingMergeJob(selectedFindingIds);
       const finished = await waitForMergeJob(job.id);
-      if (finished.case_ids.length === 0) throw new Error("Agent 任务完成但未返回漏洞组");
-      toast.success(
-        `AI 已生成 ${finished.case_ids.length} 个漏洞组，保留 ${finished.ungrouped_finding_ids.length} 条未归并 Finding`,
-      );
+      if (finished.case_ids.length === 0) {
+        toast.success("未发现满足同一根因条件的漏洞组");
+      } else {
+        toast.success(
+          `AI 已生成 ${finished.case_ids.length} 个漏洞组，保留 ${finished.ungrouped_finding_ids.length} 条未归并 Finding`,
+        );
+      }
       setSelectedFindings([]);
-      await Promise.all([loadCases(), loadTaskFindings()]);
+      await Promise.all([loadCases(), loadTaskFindings(), loadAutoJob()]);
       if (finished.case_ids.length === 1) {
         const item = await api.findingCase(String(finished.case_ids[0]));
         await openCase(item.case);
@@ -184,6 +220,44 @@ export default function FindingCasesPage() {
       }
     } catch (error) {
       toast.error(`AI 归并失败: ${error}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addMembersAndRegenerate() {
+    if (!selected || addMemberIds.length === 0) return;
+    setSaving(true);
+    try {
+      const result = await api.addFindingCaseMembers(selected.case.id, {
+        finding_ids: addMemberIds.map(Number),
+        expected_version: selected.case.version,
+        reason: "人工补充同源成员并重新生成统一报告",
+        regenerate: true,
+      });
+      if (result.job) {
+        await waitForMergeJob(result.job.id);
+      }
+      toast.success("已添加成员并重新生成统一报告");
+      setAddMemberIds([]);
+      await Promise.all([loadCases(), loadTaskFindings()]);
+      const detail = await api.findingCase(selected.case.id);
+      setSelected(detail);
+      setReport(detail.case.report ?? "");
+      setSeverity((detail.case.severity || "high") as Severity);
+      setSeverityReason(detail.case.severity_reason || "");
+    } catch (error) {
+      toast.error(`添加成员或重新生成失败: ${error}`);
+      await Promise.all([loadCases(), loadTaskFindings()]);
+      if (selected) {
+        const detail = await api.findingCase(selected.case.id).catch(() => null);
+        if (detail) {
+          setSelected(detail);
+          setReport(detail.case.report ?? "");
+          setSeverity((detail.case.severity || "high") as Severity);
+          setSeverityReason(detail.case.severity_reason || "");
+        }
+      }
     } finally {
       setSaving(false);
     }
@@ -198,7 +272,7 @@ export default function FindingCasesPage() {
       const caseID = finished.case_ids[0] ? String(finished.case_ids[0]) : finished.case_id;
       if (!caseID) throw new Error("Agent 任务完成但未返回漏洞组");
       toast.success("AI 已重新生成定级和统一报告");
-      await Promise.all([loadCases(), loadTaskFindings()]);
+      await Promise.all([loadCases(), loadTaskFindings(), loadAutoJob()]);
       const detail = await api.findingCase(caseID);
       setSelected(detail);
       setReport(detail.case.report ?? "");
@@ -310,6 +384,17 @@ export default function FindingCasesPage() {
         </div>
       </div>
 
+      {taskId && autoJob ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs">
+          <Badge variant="secondary">自动归并</Badge>
+          <span className="text-muted-foreground">
+            任务完成后的最近一次自动归并：{autoJob.status}
+            {autoJob.group_count > 0 ? ` · ${autoJob.group_count} 个漏洞组` : ""}
+            {autoJob.error ? ` · ${autoJob.error}` : ""}
+          </span>
+        </div>
+      ) : null}
+
       <div className="grid gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
         <div className="flex flex-col gap-4">
           <Card>
@@ -399,10 +484,13 @@ export default function FindingCasesPage() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate font-medium">{item.title}</span>
-                    <Badge variant={item.active ? "default" : "secondary"}>{item.active ? "有效" : "已解散"}</Badge>
+                    <div className="flex shrink-0 gap-1">
+                      {item.report_stale && item.active ? <Badge variant="secondary">报告过期</Badge> : null}
+                      <Badge variant={item.active ? "default" : "secondary"}>{item.active ? "有效" : "已解散"}</Badge>
+                    </div>
                   </div>
                   <div className="text-muted-foreground mt-1 text-xs">
-                    #{item.id} · {item.count} 条 · v{item.version}
+                    #{item.id} · {item.count} 条 · v{item.version} · {item.managed_by === "auto" ? "自动" : "人工"}
                   </div>
                 </button>
               ))}
@@ -436,6 +524,10 @@ export default function FindingCasesPage() {
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <Badge variant="outline">v{selected.case.version}</Badge>
                   <Badge variant="outline">报告 v{selected.case.report_version}</Badge>
+                  <Badge variant="secondary">
+                    {selected.case.managed_by === "auto" ? "自动归并" : "人工锁定"}
+                  </Badge>
+                  {selected.case.report_stale ? <Badge variant="destructive">成员已变更，报告待更新</Badge> : null}
                   {!selected.case.report || !selected.case.severity || !selected.case.severity_reason ? (
                     <Badge variant="secondary">报告待生成</Badge>
                   ) : null}
@@ -458,6 +550,45 @@ export default function FindingCasesPage() {
                         </Button>
                       </div>
                     ))}
+                  </div>
+                </div>
+                <div className="space-y-2 rounded-md border p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-medium">补充成员</div>
+                      <div className="text-muted-foreground text-xs">选择尚未归并的 Finding，添加后会重新生成统一报告。</div>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => void addMembersAndRegenerate()}
+                      disabled={saving || addMemberIds.length === 0}
+                    >
+                      {saving ? <Loader2 className="animate-spin" /> : <Plus />}
+                      添加并重新生成
+                    </Button>
+                  </div>
+                  <div className="max-h-52 divide-y overflow-y-auto rounded-md border">
+                    {addableFindings.map((finding) => {
+                      const key = findingKey(finding);
+                      return (
+                        <label key={key} className="flex cursor-pointer items-start gap-3 px-3 py-2 hover:bg-muted/50">
+                          <Checkbox
+                            className="mt-0.5"
+                            checked={addMemberIds.includes(key)}
+                            onCheckedChange={(checked) => toggleAddMember(finding, checked === true)}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm">{findingLabel(finding)}</span>
+                            <span className="text-muted-foreground block truncate text-xs">
+                              #{key} · {finding.severity} · {finding.vulnclass}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                    {addableFindings.length === 0 ? (
+                      <div className="text-muted-foreground px-3 py-5 text-center text-xs">暂无尚未归并的 Finding</div>
+                    ) : null}
                   </div>
                 </div>
                 <div className="grid gap-3 md:grid-cols-[160px_minmax(0,1fr)]">

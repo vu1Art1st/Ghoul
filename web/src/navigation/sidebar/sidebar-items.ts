@@ -2,6 +2,7 @@ import {
   Activity,
   Ban,
   BellRing,
+  BookMarked,
   Bot,
   Brain,
   Bug,
@@ -82,6 +83,7 @@ export const sidebarItems: NavGroup[] = [
       { id: "sync", title: "资产同步", url: "/function/sync", icon: FolderSync },
       { id: "workspace", title: "工作空间", url: "/function/workspace", icon: FolderOpen },
       { id: "shared", title: "共享空间", url: "/function/shared", icon: LibraryBig },
+      { id: "pocs", title: "PoC 与赛题", url: "/function/pocs", icon: BookMarked },
     ],
   },
   {

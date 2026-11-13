@@ -64,6 +64,26 @@ func TestLegacyEnvFallback(t *testing.T) {
 	}
 }
 
+func TestPostgresDSNTestGuardRejectsProduction(t *testing.T) {
+	t.Setenv("GHOUL_TEST_GUARD", "1")
+	t.Setenv("GHOUL_TEST_PG_DSN", "postgres://ghoul:secret@db:5432/ghoul?sslmode=disable")
+	t.Setenv("GHOUL_PG_DSN", "postgres://fallback/db")
+
+	if _, _, err := PostgresDSN(); err == nil || !strings.Contains(err.Error(), "refusing test database") {
+		t.Fatalf("production test DSN must be rejected, got %v", err)
+	}
+
+	t.Setenv("GHOUL_TEST_PG_DSN", "postgres://ghoul_test:secret@db:5432/ghoul_test?sslmode=disable")
+	got, source, err := PostgresDSN()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "postgres://ghoul_test:secret@db:5432/ghoul_test?sslmode=disable" ||
+		!strings.Contains(source, "GHOUL_TEST_PG_DSN") {
+		t.Fatalf("test DSN not selected: got=%q source=%q", got, source)
+	}
+}
+
 func TestC2DefaultsFailClosed(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")

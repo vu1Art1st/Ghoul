@@ -4,6 +4,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/Autumn-27/artex/internal/envcompat"
+	"github.com/Autumn-27/artex/internal/testdb"
 )
 
 // Database is the PostgreSQL connection config. Either set DSN directly, or set
@@ -267,6 +269,16 @@ func SkillDir() string {
 // instead of silently connecting to a wrong default. source describes where the
 // DSN came from (for startup logging).
 func PostgresDSN() (dsn, source string, err error) {
+	if strings.TrimSpace(os.Getenv(testdb.GuardEnv)) == "1" {
+		v, err := testdb.ConfiguredDSN()
+		if errors.Is(err, testdb.ErrNotConfigured) {
+			return "", "", fmt.Errorf("测试模式未配置 GHOUL_TEST_PG_DSN；测试禁止回退到 GHOUL_PG_DSN、ARTEX_PG_DSN 或 config.json")
+		}
+		if err != nil {
+			return "", "", err
+		}
+		return v, "环境变量 GHOUL_TEST_PG_DSN（测试模式）", nil
+	}
 	if v := strings.TrimSpace(envcompat.Get("GHOUL_PG_DSN", "ARTEX_PG_DSN")); v != "" {
 		source := "环境变量 GHOUL_PG_DSN"
 		if strings.TrimSpace(os.Getenv("GHOUL_PG_DSN")) == "" {

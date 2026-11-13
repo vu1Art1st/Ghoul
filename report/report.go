@@ -23,8 +23,9 @@ type Input struct {
 }
 
 type CaseView struct {
-	Case    db.FindingCase
-	Members []*db.DBFinding
+	Case     db.FindingCase
+	Members  []*db.DBFinding
+	Evidence string
 }
 
 type findingView struct {

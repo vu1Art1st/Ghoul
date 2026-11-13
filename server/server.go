@@ -773,10 +773,23 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/shared/assets", s.sharedList)
 	mux.HandleFunc("POST /api/shared/assets", s.sharedPublish)
 	mux.HandleFunc("GET /api/shared/assets/{id}", s.sharedGet)
+	mux.HandleFunc("PATCH /api/shared/assets/{id}", s.sharedPatch)
 	mux.HandleFunc("POST /api/shared/assets/{id}/status", s.sharedStatus)
+	mux.HandleFunc("GET /api/shared/assets/{id}/versions", s.sharedVersions)
+	mux.HandleFunc("GET /api/shared/assets/{id}/versions/{version}/files", s.sharedFiles)
+	mux.HandleFunc("GET /api/shared/assets/{id}/versions/{version}/file", s.sharedFile)
+	mux.HandleFunc("GET /api/shared/assets/{id}/versions/{version}/download", s.sharedDownload)
+	mux.HandleFunc("GET /api/shared/assets/{id}/events", s.sharedEvents)
 	mux.HandleFunc("GET /api/shared/packages", s.sharedPackages)
 	mux.HandleFunc("POST /api/shared/packages/install", s.sharedPackageInstall)
+	mux.HandleFunc("POST /api/shared/packages/install-system", s.sharedPackageInstallSystem)
 	mux.HandleFunc("DELETE /api/shared/packages", s.sharedPackageRemove)
+	mux.HandleFunc("GET /api/shared/runtime/doctor", s.sharedRuntimeDoctor)
+	mux.HandleFunc("GET /api/knowledge/pocs", s.pocSearch)
+	mux.HandleFunc("POST /api/knowledge/pocs", s.pocCreate)
+	mux.HandleFunc("POST /api/knowledge/pocs/{id}/verify", s.pocVerify)
+	mux.HandleFunc("POST /api/knowledge/pocs/{id}/materialize", s.pocMaterialize)
+	mux.HandleFunc("GET /api/knowledge/tasks/suggest", s.taskRelatedSuggestions)
 	mux.HandleFunc("GET /api/tasks/{id}/scope", s.taskScopeList)
 	mux.HandleFunc("POST /api/tasks/{id}/scope", s.taskScopeAdd)
 	mux.HandleFunc("DELETE /api/tasks/{id}/scope/{sid}", s.taskScopeDelete)
@@ -839,11 +852,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/exploration/finding-cases", s.mergeFindingCase)
 	mux.HandleFunc("POST /api/exploration/finding-cases/suggest", s.suggestFindingCase)
 	mux.HandleFunc("POST /api/exploration/finding-cases/agent-jobs", s.createFindingMergeJob)
+	mux.HandleFunc("GET /api/exploration/finding-cases/agent-jobs", s.latestAutoFindingMergeJob)
 	mux.HandleFunc("GET /api/exploration/finding-cases/agent-jobs/{id}", s.getFindingMergeJob)
 	mux.HandleFunc("GET /api/exploration/finding-cases/{id}", s.getFindingCase)
 	mux.HandleFunc("PATCH /api/exploration/finding-cases/{id}", s.updateFindingCase)
 	mux.HandleFunc("DELETE /api/exploration/finding-cases/{id}", s.deleteFindingCase)
 	mux.HandleFunc("POST /api/exploration/finding-cases/{id}/regenerate", s.regenerateFindingCase)
+	mux.HandleFunc("POST /api/exploration/finding-cases/{id}/members", s.addFindingCaseMembers)
 	mux.HandleFunc("DELETE /api/exploration/finding-cases/{id}/members/{findingId}", s.detachFindingCaseMember)
 	mux.HandleFunc("GET /api/exploration/intents", s.intents)
 	mux.HandleFunc("GET /api/exploration/graph", s.explorationGraph)
@@ -3395,20 +3410,21 @@ func (s *Server) settingsPayload() map[string]any {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
 	return map[string]any{
-		"traffic_capture":          s.m.TrafficEnabled(),
-		"agent_traffic_binding":    s.m.pg.GetBool(settingAgentTrafficBinding, false),
-		"llm_record":               s.m.LLMRecordEnabled(),
-		"web_search_enabled":       on,
-		"web_search_backend":       backend,
-		"brave_key_set":            strings.TrimSpace(braveKey) != "",
-		"tavily_key_set":           strings.TrimSpace(tavilyKey) != "",
-		"web_search_proxy":         proxy,                       // 独立出口代理(http/https/socks5)，空=直连
-		"global_proxy":             s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
-		"egress_proxy_pool":        s.m.ProxyPool(),             // 捕获关闭时轮询使用的出口代理池
-		"python_interpreter":       strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
-		"workers":                  s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
-		"task_concurrency_enabled": concOn,                      // 任务并发上限开关(默认关)
-		"task_concurrency_limit":   concLimit,                   // 同时运行任务上限(开启后默认5)
+		"traffic_capture":            s.m.TrafficEnabled(),
+		"agent_traffic_binding":      s.m.pg.GetBool(settingAgentTrafficBinding, false),
+		"finding_auto_merge_enabled": s.findingAutoMergeEnabled(),
+		"llm_record":                 s.m.LLMRecordEnabled(),
+		"web_search_enabled":         on,
+		"web_search_backend":         backend,
+		"brave_key_set":              strings.TrimSpace(braveKey) != "",
+		"tavily_key_set":             strings.TrimSpace(tavilyKey) != "",
+		"web_search_proxy":           proxy,                       // 独立出口代理(http/https/socks5)，空=直连
+		"global_proxy":               s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
+		"egress_proxy_pool":          s.m.ProxyPool(),             // 捕获关闭时轮询使用的出口代理池
+		"python_interpreter":         strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
+		"workers":                    s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
+		"task_concurrency_enabled":   concOn,                      // 任务并发上限开关(默认关)
+		"task_concurrency_limit":     concLimit,                   // 同时运行任务上限(开启后默认5)
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
 		"llm_pool_enabled":       s.m.LLMPoolEnabled(),
@@ -3473,6 +3489,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TrafficCapture      *bool `json:"traffic_capture"`
 		AgentTrafficBinding *bool `json:"agent_traffic_binding"`
+		FindingAutoMerge    *bool `json:"finding_auto_merge_enabled"`
 		LLMRecord           *bool `json:"llm_record"` // LLM 录制开关（默认关）；即时生效，无需重建 agent
 		// Web search. WebSearchEnabled/Backend toggle the tool + backend; BraveKey/TavilyKey
 		// are optional — omit (null) to leave a stored key untouched, send "" to clear.
@@ -3514,6 +3531,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ConstraintsInjectPlanner != nil {
 		if err := s.m.pg.SetBool(settingConstraintsInjectPlanner, *req.ConstraintsInjectPlanner); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.FindingAutoMerge != nil {
+		if err := s.m.pg.SetBool(settingFindingAutoMergeEnabled, *req.FindingAutoMerge); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

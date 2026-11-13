@@ -37,6 +37,8 @@ RUN CGO_ENABLED=0 GOARCH="${TARGETARCH}" go build -tags embedui -trimpath -o /ou
 ########## 阶段 3：运行镜像（同原版：工具 + Playwright 预装）##########
 FROM python:3.12-slim-bookworm
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG UV_VERSION=0.12.18
+ARG MISE_VERSION=2026.10.25
 # 运行层的全局 npm 装包与 chromium 下载同样走国内源（对全球网络同样可达）
 ENV npm_config_registry=$NPM_REGISTRY \
     PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
@@ -48,6 +50,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+# Shared runtime managers are part of the execution image, not lazily downloaded
+# by an agent. Keep them pinned so task environments are reproducible.
+RUN pip install --no-cache-dir "uv==${UV_VERSION}" \
+    && arch="$(uname -m)" \
+    && case "$arch" in \
+         x86_64) mise_arch="x64" ;; \
+         aarch64|arm64) mise_arch="arm64" ;; \
+         *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-${mise_arch}" \
+         -o /usr/local/bin/mise \
+    && chmod 0755 /usr/local/bin/mise \
+    && uv --version \
+    && mise --version
 # 预装 Playwright MCP 与 CLI（全局），运行时不再 npx 联网下载。
 # @playwright/mcp：browser MCP 直接 `npx @playwright/mcp`（已全局装好，无需 -y/@latest）。
 # @playwright/cli：提供 playwright-cli，装完顺带 --help 验证可执行。

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -277,6 +278,180 @@ func TestSaveFindingCaseAnalysesCreatesMultipleGroups(t *testing.T) {
 	if job == nil || job.Status != "succeeded" || job.GroupCount != 3 ||
 		fmt.Sprint(job.CaseIDs) != fmt.Sprint(caseIDs) || len(job.UngroupedFindingIDs) != 0 {
 		t.Fatalf("multi-group job result mismatch: %+v", job)
+	}
+}
+
+func TestAddFindingCaseMembersMarksReportStaleAndLocksCase(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+
+	task, err := d.CreateTask("add case member", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		id, addErr := d.AddFinding(task.ID, 0, "auth", fmt.Sprintf("finding %d", i), SeverityHigh,
+			"same root cause", "evidence", "test", nil)
+		if addErr != nil {
+			t.Fatal(addErr)
+		}
+		ids = append(ids, id)
+		defer d.DeleteFinding(id)
+	}
+
+	ctx := context.Background()
+	caseID, err := d.SaveFindingCaseAnalysis(ctx, task.ID, ids[:2], "auth bypass",
+		"same auth entry", SeverityHigh, "anonymous access", "## report", "finding_merger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteFindingCase(ctx, caseID)
+	before, err := d.GetFindingCase(ctx, caseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := d.AddFindingCaseMembers(ctx, caseID, before.Version, ids[2:],
+		"human", "new evidence confirms the same root cause")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := d.GetFindingCase(ctx, caseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != after.Version || after.Count != 3 || !after.Locked ||
+		after.ManagedBy != "manual" || !after.ReportStale {
+		t.Fatalf("member append did not invalidate/lock report: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestCreateAutoFindingMergeJobIsIdempotent(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+
+	task, err := d.CreateTask("auto merge idempotency", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	var ids []int64
+	for i := 0; i < 2; i++ {
+		id, addErr := d.AddFinding(task.ID, 0, "auth", fmt.Sprintf("finding %d", i), SeverityHigh,
+			"summary", "evidence", "test", nil)
+		if addErr != nil {
+			t.Fatal(addErr)
+		}
+		ids = append(ids, id)
+		defer d.DeleteFinding(id)
+	}
+	firstID, created, err := d.CreateAutoFindingMergeJob(context.Background(), ids, "fingerprint-1")
+	if err != nil || !created {
+		t.Fatalf("first auto job: id=%d created=%t err=%v", firstID, created, err)
+	}
+	defer d.Exec(`DELETE FROM finding_merge_jobs WHERE id=$1`, firstID)
+	secondID, created, err := d.CreateAutoFindingMergeJob(context.Background(), ids, "fingerprint-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || secondID != firstID {
+		t.Fatalf("duplicate auto job: first=%d second=%d created=%t", firstID, secondID, created)
+	}
+	job, err := d.GetFindingMergeJob(context.Background(), firstID)
+	if err != nil || job == nil || job.Mode != "auto" || job.InputHash != "fingerprint-1" {
+		t.Fatalf("auto job metadata mismatch: job=%+v err=%v", job, err)
+	}
+}
+
+func TestSaveFindingCaseAnalysesAllowsAutoEmptyResult(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+	task, err := d.CreateTask("auto empty result", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	var selected []int64
+	for i := 0; i < 2; i++ {
+		id, addErr := d.AddFinding(task.ID, 0, "auth", fmt.Sprintf("finding %d", i), SeverityHigh,
+			"summary", "evidence", "test", nil)
+		if addErr != nil {
+			t.Fatal(addErr)
+		}
+		selected = append(selected, id)
+		defer d.DeleteFinding(id)
+	}
+	caseIDs, err := d.SaveFindingCaseAnalyses(context.Background(), task.ID, []FindingCaseAnalysis{{
+		FindingIDs: selected, RootCauseKey: "same-auth", Title: "auth bypass",
+		Reason: "same root", Severity: SeverityHigh, SeverityReason: "anonymous",
+		Report: "## report",
+	}}, nil, "finding_merger:auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caseIDs) != 1 {
+		t.Fatalf("auto case ids=%v", caseIDs)
+	}
+	defer d.DeleteFindingCase(context.Background(), caseIDs[0])
+	ids, err := d.SaveFindingCaseAnalyses(context.Background(), task.ID, nil, selected, "finding_merger:auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("empty auto result returned cases: %v", ids)
+	}
+	item, err := d.GetFindingCase(context.Background(), caseIDs[0])
+	if err != nil || item == nil || item.Active || item.Count != 0 {
+		t.Fatalf("obsolete auto case was not dissolved: item=%+v err=%v", item, err)
+	}
+}
+
+func TestAutoFindingCaseSaveDoesNotOverwriteManualLock(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+	task, err := d.CreateTask("auto lock conflict", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	var ids []int64
+	for i := 0; i < 2; i++ {
+		id, addErr := d.AddFinding(task.ID, 0, "auth", fmt.Sprintf("finding %d", i), SeverityHigh,
+			"summary", "evidence", "test", nil)
+		if addErr != nil {
+			t.Fatal(addErr)
+		}
+		ids = append(ids, id)
+		defer d.DeleteFinding(id)
+	}
+	analysis := []FindingCaseAnalysis{{
+		FindingIDs: ids, RootCauseKey: "same-auth", Title: "auth bypass",
+		Reason: "same root", Severity: SeverityHigh, SeverityReason: "anonymous",
+		Report: "## report",
+	}}
+	caseIDs, err := d.SaveFindingCaseAnalyses(context.Background(), task.ID, analysis, nil, "finding_merger:auto")
+	if err != nil || len(caseIDs) != 1 {
+		t.Fatalf("create auto case: ids=%v err=%v", caseIDs, err)
+	}
+	defer d.DeleteFindingCase(context.Background(), caseIDs[0])
+	if err := d.LockFindingCaseForManual(context.Background(), caseIDs[0], "human", "manual review"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SaveFindingCaseAnalyses(context.Background(), task.ID, analysis, nil, "finding_merger:auto"); !errors.Is(err, ErrFindingCaseConflict) {
+		t.Fatalf("auto save should lose to manual lock, got %v", err)
 	}
 }
 

@@ -1208,6 +1208,41 @@ func (s *AssetStore) CountsByTypeForTask(taskID int64) (map[string]int, error) {
 	return scanTypeCounts(rows)
 }
 
+// TaskAssetIDs returns the assets directly attributable to one task. The union
+// intentionally includes explicit links, legacy task_ids membership, and finding
+// assets. It excludes detached intent anchors and unrelated global assets that
+// merely share a company or scope rule.
+func (s *AssetStore) TaskAssetIDs(taskID int64) ([]int64, error) {
+	if taskID <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`
+WITH task_assets AS (
+    SELECT asset_id FROM task_asset_links WHERE task_id=$1
+    UNION
+    SELECT id FROM assets WHERE $1 = ANY(task_ids)
+    UNION
+    SELECT value::bigint
+    FROM findings finding
+    CROSS JOIN LATERAL jsonb_array_elements_text(finding.asset_ids) value
+    WHERE finding.task_id=$1
+)
+SELECT DISTINCT asset_id FROM task_assets ORDER BY asset_id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // DeleteByTaskID removes assets owned only by taskID and detaches taskID from
 // assets shared with other tasks. Full task deletion uses the coordinated
 // transaction in DeleteTaskCascadePrepared; this method remains for callers

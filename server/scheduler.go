@@ -20,9 +20,10 @@ import (
 // + finding watermark + fired-goal set) so a restart resumes without double-firing.
 // Triggers only attach to CUSTOM agents.
 type Scheduler struct {
-	s    *Server
-	pg   *db.DB
-	tick time.Duration
+	s                 *Server
+	pg                *db.DB
+	tick              time.Duration
+	lastAutoReconcile time.Time
 }
 
 const (
@@ -51,7 +52,7 @@ func (sc *Scheduler) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			sc.s.reconcileConcurrency() // 并发上限:有空位就把排队任务补位启动
-			sc.step()
+			sc.step(ctx)
 		}
 	}
 }
@@ -114,7 +115,11 @@ func (sc *Scheduler) init() {
 	}
 }
 
-func (sc *Scheduler) step() {
+func (sc *Scheduler) step(ctx context.Context) {
+	if time.Since(sc.lastAutoReconcile) >= 30*time.Second {
+		sc.s.reconcileAutoFindingMerges(ctx)
+		sc.lastAutoReconcile = time.Now()
+	}
 	triggers, err := sc.pg.ListEnabledTriggers()
 	if err != nil {
 		return

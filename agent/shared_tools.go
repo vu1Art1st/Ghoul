@@ -33,6 +33,7 @@ func SharedTools(store SharedStore) []actool.CoreTool {
 		type item struct {
 			ID          int64    `json:"id"`
 			Name        string   `json:"name"`
+			DisplayName string   `json:"display_name"`
 			Kind        string   `json:"kind"`
 			Description string   `json:"description"`
 			Tags        []string `json:"tags"`
@@ -40,7 +41,7 @@ func SharedTools(store SharedStore) []actool.CoreTool {
 		}
 		out := []item{}
 		for _, a := range assets {
-			out = append(out, item{a.ID, a.Name, a.Kind, a.Description, a.Tags, a.CurrentVersion})
+			out = append(out, item{a.ID, a.Name, a.DisplayName, a.Kind, a.Description, a.Tags, a.CurrentVersion})
 		}
 		return jsonResult(map[string]any{"assets": out, "hint": "用 shared_get 查看调用说明，再用 shared_materialize 复制到当前任务目录。"})
 	})

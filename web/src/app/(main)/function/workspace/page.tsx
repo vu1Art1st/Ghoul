@@ -95,7 +95,8 @@ export default function WorkspacePage() {
   );
 
   React.useEffect(() => {
-    load("");
+    const initialPath = new URLSearchParams(window.location.search).get("path") ?? "";
+    load(initialPath);
   }, [load]);
 
   const crumbs = React.useMemo(() => {

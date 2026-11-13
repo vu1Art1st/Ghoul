@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +18,8 @@ import (
 )
 
 const findingMergeJobTimeout = 10 * time.Minute
+const settingFindingAutoMergeEnabled = "finding_auto_merge_enabled"
+const maxAutoMergeStartsPerTick = 2
 
 type findingMergeAgentResult struct {
 	Title          string `json:"title"`
@@ -33,6 +38,83 @@ type findingMergeCluster struct {
 type findingMergeClusterPlan struct {
 	Groups              []findingMergeCluster `json:"groups"`
 	UngroupedFindingIDs []int64               `json:"ungrouped_finding_ids"`
+}
+
+func (s *Server) findingAutoMergeEnabled() bool {
+	return s.m != nil && s.m.pg != nil && s.m.pg.GetBool(settingFindingAutoMergeEnabled, false)
+}
+
+// reconcileAutoFindingMerges is called by the scheduler. It is deliberately
+// durable and idempotent: task completion only has to produce a stable input
+// fingerprint, not a one-shot callback that could be lost on restart.
+func (s *Server) reconcileAutoFindingMerges(ctx context.Context) {
+	if !s.findingAutoMergeEnabled() {
+		return
+	}
+	taskIDs, err := s.m.pg.ListDoneTaskIDsForAutoMerge(ctx, 50)
+	if err != nil {
+		return
+	}
+	started := 0
+	for _, taskID := range taskIDs {
+		if started >= maxAutoMergeStartsPerTick {
+			break
+		}
+		ids, inputHash, ok, err := s.findingAutoMergeInput(ctx, taskID)
+		if err != nil || !ok {
+			continue
+		}
+		jobID, created, err := s.m.pg.CreateAutoFindingMergeJob(ctx, ids, inputHash)
+		if err != nil {
+			continue
+		}
+		if created {
+			go s.runFindingMergeJob(jobID)
+			started++
+			continue
+		}
+		job, getErr := s.m.pg.GetFindingMergeJob(ctx, jobID)
+		if getErr == nil && job != nil && job.Status == "failed" && job.Attempts < 3 &&
+			time.Since(job.UpdatedAt) >= time.Minute {
+			go s.runFindingMergeJob(jobID)
+			started++
+		}
+	}
+}
+
+func (s *Server) findingAutoMergeInput(ctx context.Context, taskID int64) ([]int64, string, bool, error) {
+	inputs, err := s.m.pg.ListFindingAutoMergeInputs(ctx, taskID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	eligible := make([]db.FindingAutoMergeInput, 0, len(inputs))
+	for _, item := range inputs {
+		if item.CaseLocked || item.CaseManagedBy == "manual" {
+			continue
+		}
+		eligible = append(eligible, item)
+	}
+	if len(eligible) < 2 {
+		return nil, "", false, nil
+	}
+	sort.Slice(eligible, func(i, j int) bool { return eligible[i].FindingID < eligible[j].FindingID })
+	pairs, err := s.m.pg.FindingCaseBlockPairsForTask(ctx, taskID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	prompt, _ := s.findingMergerPrompt()
+	h := sha256.New()
+	fmt.Fprintf(h, "task=%d\nprompt=%s\nreport_prompt=%s\n", taskID, prompt, agent.FindingMergerReportPrompt)
+	ids := make([]int64, 0, len(eligible))
+	for _, item := range eligible {
+		ids = append(ids, item.FindingID)
+		fmt.Fprintf(h, "finding=%d evidence=%d report=%d\n",
+			item.FindingID, item.EvidenceVersion, item.ReportEvidenceVersion)
+	}
+	for _, pair := range pairs {
+		fmt.Fprintf(h, "blocked=%d-%d\n", pair.LeftID, pair.RightID)
+	}
+	return ids, hex.EncodeToString(h.Sum(nil)), true, nil
 }
 
 func (s *Server) createFindingMergeJob(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +149,10 @@ func (s *Server) regenerateFindingCase(w http.ResponseWriter, r *http.Request) {
 	}
 	if item == nil || !item.Active {
 		writeErr(w, http.StatusNotFound, "active finding case not found")
+		return
+	}
+	if err := s.m.pg.LockFindingCaseForManual(r.Context(), caseID, "human", "人工请求重新生成统一报告"); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	members, err := s.m.pg.FindingCaseMembers(r.Context(), caseID)
@@ -122,7 +208,7 @@ func (s *Server) runFindingMergeJob(jobID int64) {
 	if job.Mode == "regenerate" {
 		status = "reporting"
 	}
-	if err := s.m.pg.SetFindingMergeJobStatus(ctx, jobID, status); err != nil {
+	if err := s.m.pg.BeginFindingMergeJob(ctx, jobID, status); err != nil {
 		return
 	}
 	caseIDs, ungrouped, err := s.executeFindingMergeAgent(ctx, job)
@@ -163,7 +249,17 @@ func (s *Server) executeFindingMergeAgent(ctx context.Context, job *db.FindingMe
 	groups := []findingMergeCluster{{FindingIDs: append([]int64(nil), job.FindingIDs...), Reason: "重新生成现有漏洞组"}}
 	ungrouped := []int64{}
 	if job.Mode != "regenerate" {
-		plan, err := s.clusterFindingMergeInput(ctx, runtime, task, findings)
+		blocked := map[[2]int64]bool{}
+		if job.Mode == "auto" {
+			pairs, pairErr := s.m.pg.FindingCaseBlockPairsForTask(ctx, *job.TaskID)
+			if pairErr != nil {
+				return nil, nil, pairErr
+			}
+			for _, pair := range pairs {
+				blocked[casePairKey(pair.LeftID, pair.RightID)] = true
+			}
+		}
+		plan, err := s.clusterFindingMergeInput(ctx, runtime, task, findings, job.Mode == "auto", blocked)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -189,18 +285,23 @@ func (s *Server) executeFindingMergeAgent(ctx context.Context, job *db.FindingMe
 			return nil, nil, fmt.Errorf("漏洞组 %d 报告生成失败: %w", i+1, err)
 		}
 		analyses = append(analyses, db.FindingCaseAnalysis{
-			FindingIDs: group.FindingIDs, Title: result.Title, Reason: result.Reason,
+			FindingIDs: group.FindingIDs, RootCauseKey: group.RootCauseKey,
+			Title: result.Title, Reason: result.Reason,
 			Severity: result.Severity, SeverityReason: result.SeverityReason, Report: result.Report,
 		})
 	}
 	if err := s.m.pg.SetFindingMergeJobStatus(ctx, job.ID, "saving"); err != nil {
 		return nil, nil, err
 	}
-	caseIDs, err := s.m.pg.SaveFindingCaseAnalyses(ctx, *job.TaskID, analyses, ungrouped, agent.FindingMergerAgentKey)
+	actor := agent.FindingMergerAgentKey
+	if job.Mode == "auto" {
+		actor += ":auto"
+	}
+	caseIDs, err := s.m.pg.SaveFindingCaseAnalyses(ctx, *job.TaskID, analyses, ungrouped, actor)
 	return caseIDs, ungrouped, err
 }
 
-func (s *Server) clusterFindingMergeInput(ctx context.Context, runtime *taskLLMRuntime, task *Task, findings []*db.DBFinding) (findingMergeClusterPlan, error) {
+func (s *Server) clusterFindingMergeInput(ctx context.Context, runtime *taskLLMRuntime, task *Task, findings []*db.DBFinding, allowEmpty bool, blocked map[[2]int64]bool) (findingMergeClusterPlan, error) {
 	prompt, err := s.findingMergerPrompt()
 	if err != nil {
 		return findingMergeClusterPlan{}, err
@@ -210,12 +311,22 @@ func (s *Server) clusterFindingMergeInput(ctx context.Context, runtime *taskLLMR
 		maxTokens = 3200
 	}
 	temperature := 0.1
+	userPrompt := findingMergePrompt(task, findings)
+	if len(blocked) > 0 {
+		var b strings.Builder
+		b.WriteString(userPrompt)
+		b.WriteString("\n\n人工已确认不能归入同组的 Finding 对（不得合并）：\n")
+		for pair := range blocked {
+			fmt.Fprintf(&b, "- %d <-> %d\n", pair[0], pair[1])
+		}
+		userPrompt = b.String()
+	}
 	message, _, _, err := runtime.Complete(ctx, llm.CompletionRequest{
 		System: []string{
 			prompt,
 			"当前是聚类阶段。只输出 groups 与 ungrouped_finding_ids，不生成 title、severity、severity_reason 或 report。",
 		},
-		Messages:    []llm.Message{llm.UserText(findingMergePrompt(task, findings))},
+		Messages:    []llm.Message{llm.UserText(userPrompt)},
 		MaxTokens:   maxTokens,
 		Temperature: &temperature,
 	})
@@ -230,7 +341,7 @@ func (s *Server) clusterFindingMergeInput(ctx context.Context, runtime *taskLLMR
 	for _, finding := range findings {
 		selected = append(selected, finding.ID)
 	}
-	if err := validateFindingMergeClusterPlan(selected, plan); err != nil {
+	if err := validateFindingMergeClusterPlanMode(selected, plan, allowEmpty, blocked); err != nil {
 		return findingMergeClusterPlan{}, err
 	}
 	return plan, nil
@@ -281,7 +392,18 @@ func parseFindingMergeClusterPlan(raw string) (findingMergeClusterPlan, error) {
 }
 
 func validateFindingMergeClusterPlan(selected []int64, plan findingMergeClusterPlan) error {
-	if len(plan.Groups) == 0 {
+	return validateFindingMergeClusterPlanMode(selected, plan, false, nil)
+}
+
+func casePairKey(a, b int64) [2]int64 {
+	if a > b {
+		a, b = b, a
+	}
+	return [2]int64{a, b}
+}
+
+func validateFindingMergeClusterPlanMode(selected []int64, plan findingMergeClusterPlan, allowEmpty bool, blocked map[[2]int64]bool) error {
+	if len(plan.Groups) == 0 && !allowEmpty {
 		return errors.New("Agent 未发现可归并的漏洞组")
 	}
 	selectedSet := make(map[int64]bool, len(selected))
@@ -289,6 +411,7 @@ func validateFindingMergeClusterPlan(selected []int64, plan findingMergeClusterP
 		selectedSet[id] = true
 	}
 	seen := map[int64]bool{}
+	rootKeys := map[string]bool{}
 	for i, group := range plan.Groups {
 		if len(group.FindingIDs) < 2 {
 			return fmt.Errorf("漏洞组 %d 少于两条 Finding", i+1)
@@ -296,6 +419,10 @@ func validateFindingMergeClusterPlan(selected []int64, plan findingMergeClusterP
 		if group.RootCauseKey == "" || group.Reason == "" {
 			return fmt.Errorf("漏洞组 %d 缺少根因键或理由", i+1)
 		}
+		if rootKeys[group.RootCauseKey] {
+			return fmt.Errorf("根因键 %q 被多个漏洞组重复使用", group.RootCauseKey)
+		}
+		rootKeys[group.RootCauseKey] = true
 		for _, id := range group.FindingIDs {
 			if !selectedSet[id] {
 				return fmt.Errorf("漏洞组 %d 引用了未选择的 Finding #%d", i+1, id)
@@ -304,6 +431,14 @@ func validateFindingMergeClusterPlan(selected []int64, plan findingMergeClusterP
 				return fmt.Errorf("Finding #%d 被重复分组", id)
 			}
 			seen[id] = true
+		}
+		for left := 0; left < len(group.FindingIDs); left++ {
+			for right := left + 1; right < len(group.FindingIDs); right++ {
+				if blocked[casePairKey(group.FindingIDs[left], group.FindingIDs[right])] {
+					return fmt.Errorf("漏洞组 %d 含有人工禁止归并的 Finding 对 #%d/#%d",
+						i+1, group.FindingIDs[left], group.FindingIDs[right])
+				}
+			}
 		}
 	}
 	for _, id := range plan.UngroupedFindingIDs {

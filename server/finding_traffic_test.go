@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http/httptest"
@@ -17,11 +18,17 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/testdb"
 	"github.com/Autumn-27/artex/traffic"
 )
 
 func trafficEvidenceServer(t *testing.T) (*Server, *db.RecordedFinding, func(string, string, string) *httptest.ResponseRecorder) {
 	t.Helper()
+	if _, err := testdb.ConfiguredDSN(); errors.Is(err, testdb.ErrNotConfigured) {
+		t.Skip("GHOUL_TEST_PG_DSN is required for server integration tests")
+	} else if err != nil {
+		t.Fatal(err)
+	}
 	m, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)

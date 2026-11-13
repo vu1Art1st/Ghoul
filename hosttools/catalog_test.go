@@ -28,6 +28,19 @@ func TestValidatePackageSpec(t *testing.T) {
 	}
 }
 
+func TestValidateMiseToolSpec(t *testing.T) {
+	for _, valid := range []string{"uv", "java@21", "node@22.14.0", "go@1.23.4"} {
+		if err := ValidateMiseToolSpec(valid); err != nil {
+			t.Errorf("%q rejected: %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{"", "python@3.12", "java@latest", "java@latest;id", "ruby@3", "https://example.com/tool"} {
+		if err := ValidateMiseToolSpec(invalid); err == nil {
+			t.Errorf("%q accepted", invalid)
+		}
+	}
+}
+
 func TestLookupRejectsUnknownTool(t *testing.T) {
 	if _, ok := Lookup("sh"); ok {
 		t.Fatal("shell must never be an install tool")

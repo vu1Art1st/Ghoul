@@ -2,10 +2,13 @@ package server
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/testdb"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -13,6 +16,10 @@ import (
 // server test suite so cross-package DELETE cleanup races with db/agent
 // packages are avoided when running `go test ./...`.
 func TestMain(m *testing.M) {
+	if err := testdb.Configure(); err != nil && !errors.Is(err, testdb.ErrNotConfigured) {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	dsn, _, err := db.DSN()
 	if err != nil {
 		os.Exit(m.Run())

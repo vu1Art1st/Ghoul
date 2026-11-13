@@ -1,0 +1,20 @@
+name: ghoul-test
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ghoul_test
+      POSTGRES_PASSWORD: ${GHOUL_TEST_POSTGRES_PASSWORD:?set GHOUL_TEST_POSTGRES_PASSWORD in .env.test}
+      POSTGRES_DB: ghoul_test
+    volumes:
+      - ghoul_test_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ghoul_test -d ghoul_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  ghoul_test_pgdata:

@@ -2,16 +2,23 @@ package evidence
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/internal/envcompat"
+	"github.com/Autumn-27/artex/internal/testdb"
 )
 
 // Initialize an explicitly configured fresh database before taking the same
 // suite lock as db, agent and server. Hold it on one pinned connection.
 func TestMain(m *testing.M) {
+	if err := testdb.Configure(); err != nil && !errors.Is(err, testdb.ErrNotConfigured) {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	if envcompat.Get("GHOUL_PG_DSN", "ARTEX_PG_DSN") == "" {
 		os.Exit(m.Run())
 	}

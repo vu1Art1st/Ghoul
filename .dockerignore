@@ -10,6 +10,7 @@ server/webui/dist
 data
 pgdata
 migration-backups
+.env.test
 toshell/configs/server.yaml
 toshell/data
 toshell/implants

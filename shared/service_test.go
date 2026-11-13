@@ -4,8 +4,39 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+func TestEnvDoesNotAdvertiseMissingSharedPython(t *testing.T) {
+	svc, err := New(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range svc.Env() {
+		if strings.HasPrefix(entry, "GHOUL_PYTHON=") && strings.TrimPrefix(entry, "GHOUL_PYTHON=") != "" {
+			t.Fatalf("empty shared venv must not be advertised as available: %s", entry)
+		}
+	}
+}
+
+func TestFindToolPrefersManagedDirectory(t *testing.T) {
+	svc, err := New(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "uv"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(svc.UvRoot(), "bin", name)
+	if err := os.WriteFile(path, []byte("test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.FindTool("uv"); got != path {
+		t.Fatalf("FindTool() = %q, want %q", got, path)
+	}
+}
 
 func TestCopyValidatedSingleFileUsesEntrypoint(t *testing.T) {
 	root := t.TempDir()
@@ -17,7 +48,7 @@ func TestCopyValidatedSingleFileUsesEntrypoint(t *testing.T) {
 	if _, err := copyValidated(src, dst); err != nil {
 		t.Fatal(err)
 	}
-	if data, err := os.ReadFile(filepath.Join(root, "bypass.py")); err != nil || string(data) != "print('ok')\n" {
+	if data, err := os.ReadFile(dst); err != nil || string(data) != "print('ok')\n" {
 		t.Fatalf("data=%q err=%v", data, err)
 	}
 }

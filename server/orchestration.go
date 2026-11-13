@@ -42,6 +42,8 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	tools = append(tools, s.findingRetestTools()...)
 	tools = append(tools, s.platformTools()...) // 平台操作工具(建改 skill/工具/MCP，给 Auto 用)
 	tools = append(tools, s.c2Tools()...)
+	tools = append(tools, s.runtimeTools()...)
+	tools = append(tools, s.knowledgeTools()...)
 	if s.shared != nil {
 		tools = append(tools, agent.SharedTools(s.shared)...)
 	}
@@ -485,6 +487,8 @@ func (s *Server) deriveTaskStatus(t *Task) string {
 // are bindable per-agent (default: bound to nobody — opt-in for orchestration
 // agents). First-insert only, like the traffic seeds.
 func (s *Server) seedOrchestrationTools() {
+	s.seedRuntimeTools()
+	s.seedKnowledgeTools()
 	// task-op + platform tools default-bind to the built-in Auto agent (它天生用来
 	// 操作平台)。SeedTool 首插入生效;老库已 seed 的行由 seedAutoDefaultBindings 补绑。
 	autoAgents, _ := json.Marshal([]string{"auto"})

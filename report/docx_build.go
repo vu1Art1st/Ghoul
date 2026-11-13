@@ -23,6 +23,14 @@ type TaskDocxInput struct {
 	GeneratedAt time.Time
 	AssetCounts map[string]int
 	Findings    []*db.DBFinding
+	// FindingCount is the number of raw findings before delivery cases are
+	// applied. Zero falls back to len(Findings).
+	FindingCount int
+	// SeverityCounts is the raw-finding severity distribution. Nil falls back to
+	// counting the displayed Findings.
+	SeverityCounts map[string]int
+	// CaseCount is the number of delivery cases represented in Findings.
+	CaseCount int
 	// AssetNames 资产 id → 可读名（域名/IP/URL）。nil/缺项回退 "id:N"（A8）。
 	AssetNames map[int64]string
 	// Retests finding id → 复测记录（最新在前）。报告带「复测记录」小节（A9）。
@@ -37,6 +45,9 @@ type TaskDocxInput struct {
 	Classification string
 	// PageHeader 页眉文字（空 = 「渗透测试报告」）。
 	PageHeader string
+	// Warnings reports non-blocking export integrity issues. They never change
+	// task completion or trigger additional scanning.
+	Warnings []string
 	// ArtifactImage 证据附件图片解析器（v0.5.0）：Markdown 里
 	// ![说明](artifact:<id>) 会内嵌为图片；nil = 降级为文字说明。
 	ArtifactImage func(id int64) (data []byte, caption string, ok bool)
@@ -55,6 +66,29 @@ func sevRankKey(f *db.DBFinding) int {
 	default:
 		return 4
 	}
+}
+
+func findingCount(f *db.DBFinding) int {
+	if f != nil && f.FindingCount > 0 {
+		return f.FindingCount
+	}
+	return 1
+}
+
+func groupFindingCount(items []*db.DBFinding) int {
+	total := 0
+	for _, item := range items {
+		total += findingCount(item)
+	}
+	return total
+}
+
+func severityCounts(findings []*db.DBFinding) map[string]int {
+	counts := map[string]int{}
+	for _, finding := range findings {
+		counts[strings.ToLower(strings.TrimSpace(finding.Severity))]++
+	}
+	return counts
 }
 
 // BuildTaskDocx 渲染任务总报告:
@@ -86,9 +120,20 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 	d.CoverLine(classification, 24, false)
 	d.CoverLine("", 0, false)
 	d.CoverLine("报告生成时间:"+FormatTimeUTC(in.GeneratedAt), 24, false)
-	d.CoverLine(fmt.Sprintf("漏洞总数:%d(严重 %d / 高危 %d / 中危 %d / 低危 %d)",
-		len(in.Findings), countSev(in.Findings, "critical"), countSev(in.Findings, "high"),
-		countSev(in.Findings, "medium"), countSev(in.Findings, "low")), 24, false)
+	rawCount := in.FindingCount
+	if rawCount == 0 {
+		rawCount = len(in.Findings)
+	}
+	rawSeverity := in.SeverityCounts
+	if rawSeverity == nil {
+		rawSeverity = severityCounts(in.Findings)
+	}
+	totalLine := fmt.Sprintf("漏洞总数:%d(严重 %d / 高危 %d / 中危 %d / 低危 %d)",
+		rawCount, rawSeverity["critical"], rawSeverity["high"], rawSeverity["medium"], rawSeverity["low"])
+	if in.CaseCount > 0 && in.CaseCount != rawCount {
+		totalLine += fmt.Sprintf("，归并后 %d 组", in.CaseCount)
+	}
+	d.CoverLine(totalLine, 24, false)
 	d.PageBreak()
 
 	// ── 目录页（A4）：TOC 字段，settings.xml updateFields 打开自动刷新 ──
@@ -117,7 +162,7 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 	rows := make([][]string, 0, 4)
 	fills := make([]string, 0, 4)
 	for _, sev := range []string{"critical", "high", "medium", "low"} {
-		n := countSev(in.Findings, sev)
+		n := rawSeverity[sev]
 		if n > 0 {
 			rows = append(rows, []string{SeverityCN(sev), fmt.Sprint(n)})
 			fills = append(fills, SeverityHexSoft(sev))
@@ -134,6 +179,14 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 			rows = append(rows, []string{g.class, fmt.Sprint(len(g.items)), fmt.Sprint(len(g.assets))})
 		}
 		d.Table([]string{"漏洞类别", "条数", "涉及资产数"}, rows)
+	}
+	if len(in.Warnings) > 0 {
+		d.H2("报告完整性说明")
+		for _, warning := range in.Warnings {
+			if strings.TrimSpace(warning) != "" {
+				d.Bullet(warning)
+			}
+		}
 	}
 	d.PageBreak()
 
@@ -174,7 +227,7 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 	d.H1("三、漏洞明细")
 	groups := groupByClass(in.Findings)
 	for gi, g := range groups {
-		d.H2(fmt.Sprintf("3.%d %s(共 %d 条)", gi+1, g.class, len(g.items)))
+		d.H2(fmt.Sprintf("3.%d %s(共 %d 条)", gi+1, g.class, groupFindingCount(g.items)))
 		for fi, f := range g.items {
 			// 严重度着色（A2）：标题颜色随级别，一眼分诊
 			if hex := SeverityHex(f.Severity); hex != "" {
@@ -183,6 +236,9 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 				d.H3(fmt.Sprintf("3.%d.%d [%s] %s", gi+1, fi+1, SeverityCN(f.Severity), findingTitle(f)))
 			}
 			d.P(fmt.Sprintf("漏洞类别:%s", nz(f.VulnClass, "未分类")))
+			if f.FindingCount > 1 {
+				d.P(fmt.Sprintf("归并 Finding:%d 条", f.FindingCount))
+			}
 			if len(f.AssetIDs) > 0 {
 				d.P(fmt.Sprintf("影响资产:%s", assetNames(f.AssetIDs, in.AssetNames)))
 			}
@@ -191,11 +247,12 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 				d.H4("摘要")
 				d.P(f.Summary)
 			}
-			if body := strings.TrimSpace(f.Report); body != "" {
+			body := strings.TrimSpace(f.Report)
+			if body != "" {
 				d.H4("详细报告")
 				writeMarkdownish(d, body)
 			}
-			if ev := strings.TrimSpace(f.Evidence); ev != "" {
+			if ev := strings.TrimSpace(f.Evidence); ev != "" && !markdownHasEvidenceSection(body) {
 				d.H4("证据 / PoC")
 				d.Code(ev)
 			}
@@ -316,12 +373,17 @@ func statusCN(s string) string {
 // assetNames 资产 id 列表 → 可读名（A8）。缺映射的回退 "id:N"。
 func assetNames(ids []int64, names map[int64]string) string {
 	parts := make([]string, 0, len(ids))
+	seen := map[string]bool{}
 	for _, id := range ids {
+		name := fmt.Sprintf("id:%d", id)
 		if n, ok := names[id]; ok && strings.TrimSpace(n) != "" {
-			parts = append(parts, n)
+			name = n
+		}
+		if seen[name] {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("id:%d", id))
+		seen[name] = true
+		parts = append(parts, name)
 	}
 	return strings.Join(parts, ", ")
 }
@@ -511,7 +573,8 @@ func BuildFindingDocx(in FindingDocxInput) *Docx {
 		d.Hei1("二、详细报告")
 		writeMarkdownish(d, body)
 	}
-	if ev := strings.TrimSpace(f.Evidence); ev != "" {
+	body := strings.TrimSpace(f.Report)
+	if ev := strings.TrimSpace(f.Evidence); ev != "" && !markdownHasEvidenceSection(body) {
 		d.Hei1("三、证据 / PoC")
 		d.Code(ev)
 	}
@@ -622,13 +685,11 @@ func writeMarkdownish(d *Docx, md string) {
 		}
 		switch {
 		case strings.HasPrefix(trimmed, "### "):
-			d.H4(strings.TrimPrefix(trimmed, "### "))
+			d.bodyHeading(strings.TrimPrefix(trimmed, "### "), 3)
 		case strings.HasPrefix(trimmed, "## "):
-			// 公文二级标题：楷体三号（v0.4.3 对齐参考件）
-			d.Kai2(strings.TrimPrefix(trimmed, "## "))
+			d.bodyHeading(strings.TrimPrefix(trimmed, "## "), 2)
 		case strings.HasPrefix(trimmed, "# "):
-			// 公文一级标题：黑体三号（v0.4.3 对齐参考件）
-			d.Hei1(strings.TrimPrefix(trimmed, "# "))
+			d.bodyHeading(strings.TrimPrefix(trimmed, "# "), 1)
 		case strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* "):
 			// 嵌套列表：行首每 2 个空格一级（reporter 常写二级清单），ilvl 交给
 			// numbering.xml 的多级定义；压平会让层级关系全丢（v0.4.0）。
@@ -647,11 +708,11 @@ func writeMarkdownish(d *Docx, md string) {
 			// 「一、排查经过」（黑体一级）与「（一）现场证据采集。」（楷体二级），
 			// 短行按标题排版，长行仍按正文（避免误伤带内容的段落）。
 			if gongwenHeiRe.MatchString(trimmed) && len([]rune(trimmed)) <= 40 {
-				d.Hei1(trimmed)
+				d.bodyHeading(trimmed, 1)
 				continue
 			}
 			if gongwenKaiRe.MatchString(trimmed) && len([]rune(trimmed)) <= 30 {
-				d.Kai2(trimmed)
+				d.bodyHeading(trimmed, 2)
 				continue
 			}
 			d.PRich(trimmed)
@@ -659,6 +720,28 @@ func writeMarkdownish(d *Docx, md string) {
 	}
 	flushTable()
 	flushCode()
+}
+
+// markdownHasEvidenceSection reports whether the model-authored report already
+// contains a dedicated evidence or PoC section. The structured Evidence field is
+// then treated as supplementary input instead of being appended a second time.
+func markdownHasEvidenceSection(md string) bool {
+	for _, line := range strings.Split(md, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		title := strings.TrimSpace(strings.TrimLeft(line, "#"))
+		lower := strings.ToLower(title)
+		switch {
+		case strings.HasPrefix(title, "证据"),
+			strings.HasPrefix(title, "PoC"),
+			strings.HasPrefix(lower, "poc"),
+			strings.HasPrefix(title, "概念验证"):
+			return true
+		}
+	}
+	return false
 }
 
 // 公文序号标题识别：一、/二、… 开头（黑体一级）、（一）/（二）… 开头（楷体二级）。
@@ -698,16 +781,6 @@ func isTableSeparator(cells []string) bool {
 		}
 	}
 	return true
-}
-
-func countSev(fs []*db.DBFinding, sev string) int {
-	n := 0
-	for _, f := range fs {
-		if strings.EqualFold(f.Severity, sev) {
-			n++
-		}
-	}
-	return n
 }
 
 // assetTypeCN 资产类型中文(概览表用)。

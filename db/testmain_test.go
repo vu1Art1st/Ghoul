@@ -2,9 +2,12 @@ package db
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"testing"
 
+	"github.com/Autumn-27/artex/internal/testdb"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -14,6 +17,10 @@ import (
 // avoid cross-package cleanup races (e.g. DELETE FROM assets WHERE id > X
 // from one package deleting assets created by another).
 func TestMain(m *testing.M) {
+	if err := testdb.Configure(); err != nil && !errors.Is(err, testdb.ErrNotConfigured) {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	dsn, _, err := DSN()
 	if err != nil {
 		// No DB configured — tests that need PG will skip themselves.

@@ -263,6 +263,71 @@ func (s *Server) updateFindingCase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, item)
 }
 
+func (s *Server) addFindingCaseMembers(w http.ResponseWriter, r *http.Request) {
+	caseID, ok := pathInt(r, "id")
+	if !ok || caseID <= 0 {
+		writeErr(w, 400, "bad case id")
+		return
+	}
+	var req struct {
+		FindingIDs      []int64 `json:"finding_ids"`
+		ExpectedVersion int64   `json:"expected_version"`
+		Reason          string  `json:"reason"`
+		Regenerate      bool    `json:"regenerate"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	version, err := s.m.pg.AddFindingCaseMembers(r.Context(), caseID, req.ExpectedVersion,
+		req.FindingIDs, "human", req.Reason)
+	if err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
+	item, err := s.m.pg.GetFindingCase(r.Context(), caseID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	var job *db.FindingMergeJob
+	if req.Regenerate {
+		members, memberErr := s.m.pg.FindingCaseMembers(r.Context(), caseID)
+		if memberErr != nil {
+			writeErr(w, 500, memberErr.Error())
+			return
+		}
+		ids := make([]int64, 0, len(members))
+		for _, member := range members {
+			ids = append(ids, member.ID)
+		}
+		jobID, jobErr := s.m.pg.CreateFindingMergeJob(r.Context(), ids, "regenerate")
+		if jobErr != nil {
+			writeErr(w, 409, jobErr.Error())
+			return
+		}
+		go s.runFindingMergeJob(jobID)
+		job, _ = s.m.pg.GetFindingMergeJob(r.Context(), jobID)
+	}
+	writeJSON(w, 202, map[string]any{
+		"case": item, "version": i64s(version), "job": job,
+	})
+}
+
+func (s *Server) latestAutoFindingMergeJob(w http.ResponseWriter, r *http.Request) {
+	taskID := int64(atoiDefault(r.URL.Query().Get("task"), 0))
+	if taskID <= 0 {
+		writeErr(w, 400, "task is required")
+		return
+	}
+	job, err := s.m.pg.LatestAutoFindingMergeJobForTask(r.Context(), taskID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"job": job})
+}
+
 func (s *Server) detachFindingCaseMember(w http.ResponseWriter, r *http.Request) {
 	caseID, ok := pathInt(r, "id")
 	findingID, okFinding := pathInt(r, "findingId")

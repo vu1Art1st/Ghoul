@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -21,6 +22,11 @@ import (
 )
 
 const maxJobLog = 256 << 10
+
+var (
+	uvVersionRE = regexp.MustCompile(`^[0-9][A-Za-z0-9._+-]{0,39}$`)
+	miseToolRE  = regexp.MustCompile(`^(uv|java|node|go)(?:@[0-9][A-Za-z0-9._+-]{0,39})?$`)
+)
 
 type Installer struct {
 	db      *db.DB
@@ -66,6 +72,22 @@ func (i *Installer) start(kind, target, proxy string) (*db.HostInstallJob, error
 		if err := ValidatePackageSpec(target); err != nil {
 			return nil, err
 		}
+	} else if kind == "python-package-system" {
+		if err := ValidatePackageSpec(target); err != nil {
+			return nil, err
+		}
+	} else if kind == "python-venv" || kind == "uv-python" {
+		target = strings.TrimSpace(target)
+		if strings.ContainsAny(target, "\r\n\t") {
+			return nil, fmt.Errorf("运行时参数包含非法字符")
+		}
+		if kind == "uv-python" && target != "" && !uvVersionRE.MatchString(target) {
+			return nil, fmt.Errorf("uv Python 版本非法")
+		}
+	} else if kind == "mise-tool" {
+		if err := ValidateMiseToolSpec(target); err != nil {
+			return nil, fmt.Errorf("mise 工具规格非法: %w", err)
+		}
 	} else if kind == "python-uninstall" {
 		if err := ValidatePackageSpec(target); err != nil {
 			return nil, err
@@ -79,7 +101,7 @@ func (i *Installer) start(kind, target, proxy string) (*db.HostInstallJob, error
 	}
 	idBytes := make([]byte, 8)
 	_, _ = rand.Read(idBytes)
-	j := &job{record: db.HostInstallJob{ID: hex.EncodeToString(idBytes), Kind: kind, Target: target, State: "queued"}, proxy: proxy}
+	j := &job{record: db.HostInstallJob{ID: hex.EncodeToString(idBytes), Kind: kind, Target: target, State: "queued", Language: installLanguage(kind, target)}, proxy: proxy}
 	if err := i.db.CreateHostInstallJob(context.Background(), &j.record); err != nil {
 		return nil, err
 	}
@@ -155,11 +177,32 @@ func (i *Installer) execute(ctx context.Context, j *job) (int, error) {
 	if j.record.Kind == "python-package" {
 		return i.installPython(ctx, j, j.record.Target)
 	}
+	if j.record.Kind == "python-package-system" {
+		return i.installSystemPython(ctx, j, j.record.Target)
+	}
+	if j.record.Kind == "python-venv" {
+		base := j.record.Target
+		clear := base == "repair" || base == "clear"
+		if clear {
+			base = ""
+		}
+		if err := i.ensureVenvWithBase(ctx, j, base, clear); err != nil {
+			return 1, err
+		}
+		i.recordPythonVersion(ctx, j, i.shared.Python())
+		return 0, nil
+	}
+	if j.record.Kind == "uv-python" {
+		return i.installUvPython(ctx, j, j.record.Target)
+	}
+	if j.record.Kind == "mise-tool" {
+		return i.installMiseTool(ctx, j, j.record.Target)
+	}
 	if j.record.Kind == "python-uninstall" {
 		if err := i.ensureVenv(ctx, j); err != nil {
 			return 1, err
 		}
-		code, err := i.command(ctx, j, i.shared.Python(), "-m", "pip", "uninstall", "-y", j.record.Target)
+		code, err := i.runUvPip(ctx, j, "uninstall", "--python", i.shared.Python(), "-y", j.record.Target)
 		if code == 0 {
 			i.freeze(ctx)
 		}
@@ -192,20 +235,49 @@ func (i *Installer) execute(ctx context.Context, j *job) (int, error) {
 }
 
 func (i *Installer) ensureVenv(ctx context.Context, j *job) error {
+	return i.ensureVenvWithBase(ctx, j, "", false)
+}
+
+func (i *Installer) ensureVenvWithBase(ctx context.Context, j *job, base string, clear bool) error {
 	if _, err := os.Stat(i.shared.Python()); err == nil {
-		return nil
-	}
-	python := ""
-	for _, candidate := range []string{"python3", "python"} {
-		if path, err := exec.LookPath(candidate); err == nil {
-			python = path
-			break
+		if !clear {
+			return nil
 		}
 	}
-	if python == "" {
+	venvDir := filepath.Join(i.shared.PythonRoot(), "venvs", "default")
+	if info, err := os.Stat(venvDir); err == nil && info.IsDir() && !clear {
+		// The directory exists but its interpreter is not runnable on this host
+		// (for example a venv copied from Windows into the Linux container).
+		clear = true
+		j.append("shared venv is present but unusable; rebuilding it\n")
+	}
+	if strings.TrimSpace(base) == "" {
+		for _, candidate := range []string{"python3", "python"} {
+			if path := i.findTool(candidate); path != "" {
+				base = path
+				break
+			}
+		}
+	}
+	if base == "" {
 		return fmt.Errorf("未检测到 Python，无法创建共享运行环境")
 	}
-	code, err := i.command(ctx, j, python, "-m", "venv", filepath.Join(i.shared.PythonRoot(), "venv"))
+	if uv := i.findTool("uv"); uv != "" {
+		args := []string{"venv", "--python", base}
+		if clear {
+			args = append(args, "--clear")
+		}
+		args = append(args, venvDir)
+		code, runErr := i.command(ctx, j, uv, args...)
+		if runErr == nil && code == 0 {
+			return nil
+		}
+		j.append("uv venv failed; falling back to python -m venv\n")
+	}
+	if clear {
+		_ = os.RemoveAll(venvDir)
+	}
+	code, err := i.command(ctx, j, base, "-m", "venv", venvDir)
 	if err != nil {
 		return err
 	}
@@ -215,6 +287,46 @@ func (i *Installer) ensureVenv(ctx context.Context, j *job) error {
 	return nil
 }
 
+func (i *Installer) installUvPython(ctx context.Context, j *job, version string) (int, error) {
+	uv := i.findTool("uv")
+	if uv == "" {
+		return 1, fmt.Errorf("未检测到 uv")
+	}
+	args := []string{"python", "install"}
+	if version != "" {
+		args = append(args, version)
+	}
+	return i.command(ctx, j, uv, args...)
+}
+
+func (i *Installer) installMiseTool(ctx context.Context, j *job, spec string) (int, error) {
+	mise := i.findTool("mise")
+	if mise == "" {
+		return 1, fmt.Errorf("未检测到 mise")
+	}
+	if err := ValidateMiseToolSpec(spec); err != nil {
+		return 1, err
+	}
+	return i.command(ctx, j, mise, "use", "--global", spec)
+}
+
+func (i *Installer) runUvPip(ctx context.Context, j *job, args ...string) (int, error) {
+	python := i.shared.Python()
+	fallbackArgs := make([]string, 0, len(args))
+	for n := 0; n < len(args); n++ {
+		if args[n] == "--python" && n+1 < len(args) {
+			python = args[n+1]
+			n++
+			continue
+		}
+		fallbackArgs = append(fallbackArgs, args[n])
+	}
+	if uv := i.findTool("uv"); uv != "" {
+		return i.command(ctx, j, uv, append([]string{"pip"}, args...)...)
+	}
+	return i.command(ctx, j, python, append([]string{"-m", "pip"}, fallbackArgs...)...)
+}
+
 func (i *Installer) installPython(ctx context.Context, j *job, spec string) (int, error) {
 	if err := ValidatePackageSpec(spec); err != nil {
 		return 1, err
@@ -222,11 +334,12 @@ func (i *Installer) installPython(ctx context.Context, j *job, spec string) (int
 	if err := i.ensureVenv(ctx, j); err != nil {
 		return 1, err
 	}
-	args := []string{"-m", "pip", "install", "--disable-pip-version-check", spec}
+	i.recordPythonVersion(ctx, j, i.shared.Python())
+	args := []string{"install", "--python", i.shared.Python(), spec}
 	if proxy := i.jobProxy(j); proxy != "" {
 		args = append(args, "--proxy", proxy)
 	}
-	code, err := i.command(ctx, j, i.shared.Python(), args...)
+	code, err := i.runUvPip(ctx, j, args...)
 	if err != nil || code != 0 {
 		return code, err
 	}
@@ -235,9 +348,99 @@ func (i *Installer) installPython(ctx context.Context, j *job, spec string) (int
 	return 0, nil
 }
 
+func (i *Installer) systemPython() string {
+	if p := strings.TrimSpace(os.Getenv("GHOUL_SYSTEM_PYTHON")); p != "" {
+		return p
+	}
+	for _, candidate := range []string{"python3", "python"} {
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+func (i *Installer) installSystemPython(ctx context.Context, j *job, spec string) (int, error) {
+	python := i.systemPython()
+	if python == "" {
+		return 1, fmt.Errorf("未检测到可用于回退的系统 Python")
+	}
+	version := i.pythonVersion(ctx, python)
+	j.mu.Lock()
+	j.record.ResolvedVersion = version
+	j.mu.Unlock()
+	j.append("system-install ephemeral interpreter=" + python + " version=" + version + " package=" + spec + "\n")
+	var code int
+	var err error
+	if uv := i.findTool("uv"); uv != "" {
+		args := []string{"pip", "install", "--system", "--python", python, spec}
+		if proxy := i.jobProxy(j); proxy != "" {
+			args = append(args, "--proxy", proxy)
+		}
+		code, err = i.command(ctx, j, uv, args...)
+	} else {
+		args := []string{"-m", "pip", "install", "--break-system-packages", spec}
+		if proxy := i.jobProxy(j); proxy != "" {
+			args = append(args, "--proxy", proxy)
+		}
+		code, err = i.command(ctx, j, python, args...)
+	}
+	if err != nil || code != 0 {
+		return code, err
+	}
+	if code, err = i.verifySystemPackage(ctx, j, python, spec); err != nil || code != 0 {
+		return code, err
+	}
+	j.append("system Python install is ephemeral and may be lost on container rebuild\n")
+	return 0, nil
+}
+
+func (i *Installer) recordPythonVersion(ctx context.Context, j *job, python string) {
+	version := i.pythonVersion(ctx, python)
+	j.mu.Lock()
+	j.record.ResolvedVersion = version
+	j.mu.Unlock()
+	if version != "" {
+		j.append("resolved Python: " + version + "\n")
+	}
+}
+
+func (i *Installer) pythonVersion(ctx context.Context, python string) string {
+	cmd := exec.CommandContext(ctx, python, "--version")
+	cmd.Env = os.Environ()
+	if i.shared != nil {
+		cmd.Env = append(cmd.Env, i.shared.Env()...)
+	}
+	data, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func installLanguage(kind, target string) string {
+	switch kind {
+	case "python-package", "python-package-system", "python-venv", "uv-python", "python-uninstall":
+		return "python"
+	case "mise-tool":
+		if idx := strings.IndexByte(target, '@'); idx >= 0 {
+			target = target[:idx]
+		}
+		return strings.TrimSpace(target)
+	default:
+		return ""
+	}
+}
+
 func (i *Installer) freeze(ctx context.Context) {
 	lockPath := filepath.Join(i.shared.PythonRoot(), "locks", "requirements-freeze.txt")
-	cmd := exec.CommandContext(ctx, i.shared.Python(), "-m", "pip", "freeze")
+	var cmd *exec.Cmd
+	if uv := i.findTool("uv"); uv != "" {
+		cmd = exec.CommandContext(ctx, uv, "pip", "freeze", "--python", i.shared.Python())
+	} else {
+		cmd = exec.CommandContext(ctx, i.shared.Python(), "-m", "pip", "freeze")
+	}
+	cmd.Env = append(os.Environ(), i.shared.Env()...)
 	data, freezeErr := cmd.Output()
 	if freezeErr == nil {
 		_ = os.WriteFile(lockPath, data, 0o600)
@@ -288,7 +491,11 @@ func (i *Installer) command(ctx context.Context, j *job, name string, args ...st
 	proxy := i.jobProxy(j)
 	j.append(redactProxy("$ "+name+" "+strings.Join(args, " ")+"\n", proxy))
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive", "PIP_DISABLE_PIP_VERSION_CHECK=1")
+	cmd.Env = os.Environ()
+	if i.shared != nil {
+		cmd.Env = append(cmd.Env, i.shared.Env()...)
+	}
+	cmd.Env = append(cmd.Env, "DEBIAN_FRONTEND=noninteractive", "PIP_DISABLE_PIP_VERSION_CHECK=1")
 	if proxy != "" {
 		cmd.Env = append(cmd.Env, "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy)
 	}
@@ -303,6 +510,31 @@ func (i *Installer) command(ctx context.Context, j *job, name string, args ...st
 		return exit.ExitCode(), fmt.Errorf("%s 退出码 %d", name, exit.ExitCode())
 	}
 	return 0, err
+}
+
+func (i *Installer) findTool(name string) string {
+	if i.shared != nil {
+		if path := i.shared.FindTool(name); path != "" {
+			return path
+		}
+	}
+	path, _ := exec.LookPath(name)
+	return path
+}
+
+func (i *Installer) verifySystemPackage(ctx context.Context, j *job, python, spec string) (int, error) {
+	base := spec
+	if idx := strings.IndexAny(base, "=<>!~[("); idx >= 0 {
+		base = base[:idx]
+	}
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return 1, fmt.Errorf("无法从包规格解析包名")
+	}
+	if uv := i.findTool("uv"); uv != "" {
+		return i.command(ctx, j, uv, "pip", "show", "--python", python, base)
+	}
+	return i.command(ctx, j, python, "-m", "pip", "show", base)
 }
 
 func (i *Installer) jobProxy(j *job) string {
@@ -359,6 +591,14 @@ func ValidatePackageSpec(spec string) error {
 	}
 	if strings.ContainsAny(spec, "@:+") || strings.Contains(spec, "://") {
 		return fmt.Errorf("只允许 PyPI 包名与版本约束，不允许 URL 或本地路径")
+	}
+	return nil
+}
+
+func ValidateMiseToolSpec(spec string) error {
+	spec = strings.TrimSpace(spec)
+	if spec == "" || !miseToolRE.MatchString(spec) {
+		return fmt.Errorf("只允许 uv/java/node/go 及可选的 @version")
 	}
 	return nil
 }

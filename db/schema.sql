@@ -640,6 +640,10 @@ CREATE TABLE IF NOT EXISTS task_relations (
     PRIMARY KEY (task_id, source_task_id),
     CONSTRAINT ck_task_relation_not_self CHECK (task_id <> source_task_id)
 );
+ALTER TABLE task_relations ADD COLUMN IF NOT EXISTS relation_type TEXT NOT NULL DEFAULT 'related';
+ALTER TABLE task_relations ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_relations ADD COLUMN IF NOT EXISTS confidence REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE task_relations ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'manual';
 CREATE INDEX IF NOT EXISTS idx_task_relations_source ON task_relations(source_task_id);
 
 -- Task/asset provenance supplements the legacy assets.task_ids association. The
@@ -955,6 +959,7 @@ CREATE TRIGGER trg_tools_upd BEFORE UPDATE ON tools
 CREATE TABLE IF NOT EXISTS shared_assets (
     id            BIGSERIAL PRIMARY KEY,
     name          TEXT NOT NULL,
+    display_name  TEXT NOT NULL DEFAULT '',
     kind          TEXT NOT NULL,
     description   TEXT NOT NULL DEFAULT '',
     tags          JSONB NOT NULL DEFAULT '[]',
@@ -962,6 +967,9 @@ CREATE TABLE IF NOT EXISTS shared_assets (
     entrypoint    TEXT NOT NULL DEFAULT '',
     usage         TEXT NOT NULL DEFAULT '',
     dependencies  JSONB NOT NULL DEFAULT '[]',
+    runtime_id    BIGINT,
+    runtime_spec  TEXT NOT NULL DEFAULT '',
+    healthcheck   JSONB NOT NULL DEFAULT '{}',
     current_version INTEGER NOT NULL DEFAULT 0,
     status        TEXT NOT NULL DEFAULT 'pending_review',
     source_task_id BIGINT,
@@ -970,7 +978,14 @@ CREATE TABLE IF NOT EXISTS shared_assets (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(name)
 );
+ALTER TABLE shared_assets ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';
+UPDATE shared_assets SET display_name=name WHERE display_name='';
+ALTER TABLE shared_assets ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE shared_assets ADD COLUMN IF NOT EXISTS runtime_id BIGINT;
+ALTER TABLE shared_assets ADD COLUMN IF NOT EXISTS runtime_spec TEXT NOT NULL DEFAULT '';
+ALTER TABLE shared_assets ADD COLUMN IF NOT EXISTS healthcheck JSONB NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_shared_assets_status ON shared_assets(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shared_assets_display_name ON shared_assets(lower(display_name));
 DROP TRIGGER IF EXISTS trg_shared_assets_upd ON shared_assets;
 CREATE TRIGGER trg_shared_assets_upd BEFORE UPDATE ON shared_assets
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -986,6 +1001,79 @@ CREATE TABLE IF NOT EXISTS shared_asset_versions (
     UNIQUE(asset_id, version)
 );
 
+CREATE TABLE IF NOT EXISTS shared_asset_events (
+    id            BIGSERIAL PRIMARY KEY,
+    asset_id      BIGINT NOT NULL REFERENCES shared_assets(id) ON DELETE CASCADE,
+    action        TEXT NOT NULL,
+    actor         TEXT NOT NULL DEFAULT '',
+    detail        JSONB NOT NULL DEFAULT '{}',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_shared_asset_events_asset ON shared_asset_events(asset_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS runtime_environments (
+    id               BIGSERIAL PRIMARY KEY,
+    name             TEXT NOT NULL UNIQUE,
+    language         TEXT NOT NULL,
+    provider         TEXT NOT NULL, -- uv | mise | system
+    version_spec     TEXT NOT NULL DEFAULT '',
+    root_path        TEXT NOT NULL DEFAULT '',
+    base_interpreter TEXT NOT NULL DEFAULT '',
+    status           TEXT NOT NULL DEFAULT 'pending',
+    manifest         JSONB NOT NULL DEFAULT '{}',
+    health           JSONB NOT NULL DEFAULT '{}',
+    source_task_id   BIGINT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+DROP TRIGGER IF EXISTS trg_runtime_environments_upd ON runtime_environments;
+CREATE TRIGGER trg_runtime_environments_upd BEFORE UPDATE ON runtime_environments
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS runtime_bindings (
+    id             BIGSERIAL PRIMARY KEY,
+    task_id        BIGINT REFERENCES tasks(id) ON DELETE CASCADE,
+    role           TEXT NOT NULL DEFAULT '*',
+    language       TEXT NOT NULL,
+    environment_id BIGINT NOT NULL REFERENCES runtime_environments(id) ON DELETE CASCADE,
+    priority       INTEGER NOT NULL DEFAULT 100,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_bindings_task ON runtime_bindings(task_id, language, priority);
+
+CREATE TABLE IF NOT EXISTS poc_records (
+    id                BIGSERIAL PRIMARY KEY,
+    name              TEXT NOT NULL,
+    scope_type        TEXT NOT NULL DEFAULT 'component',
+    target_key        TEXT NOT NULL DEFAULT '',
+    vendor            TEXT NOT NULL DEFAULT '',
+    product           TEXT NOT NULL DEFAULT '',
+    component         TEXT NOT NULL DEFAULT '',
+    affected_versions TEXT NOT NULL DEFAULT '',
+    fingerprint       JSONB NOT NULL DEFAULT '{}',
+    metadata          JSONB NOT NULL DEFAULT '{}',
+    cve_ids           TEXT[] NOT NULL DEFAULT '{}',
+    cwe_ids           TEXT[] NOT NULL DEFAULT '{}',
+    exploit_method    TEXT NOT NULL DEFAULT '',
+    prerequisites     TEXT NOT NULL DEFAULT '',
+    impact            TEXT NOT NULL DEFAULT '',
+    validation_status TEXT NOT NULL DEFAULT 'draft',
+    confidence        TEXT NOT NULL DEFAULT 'observed',
+    source_task_id    BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    source_intent_id  BIGINT,
+    finding_id        BIGINT,
+    asset_ids         BIGINT[] NOT NULL DEFAULT '{}',
+    artifact_asset_id BIGINT REFERENCES shared_assets(id) ON DELETE SET NULL,
+    artifact_version  INTEGER NOT NULL DEFAULT 0,
+    last_verified_at  TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE poc_records ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_poc_records_target ON poc_records(target_key);
+CREATE INDEX IF NOT EXISTS idx_poc_records_product ON poc_records(product, component);
+CREATE INDEX IF NOT EXISTS idx_poc_records_status ON poc_records(validation_status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS host_install_jobs (
     id            TEXT PRIMARY KEY,
     kind          TEXT NOT NULL,
@@ -998,6 +1086,9 @@ CREATE TABLE IF NOT EXISTS host_install_jobs (
     started_at    TIMESTAMPTZ,
     ended_at      TIMESTAMPTZ
 );
+ALTER TABLE host_install_jobs ADD COLUMN IF NOT EXISTS runtime_id BIGINT;
+ALTER TABLE host_install_jobs ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT '';
+ALTER TABLE host_install_jobs ADD COLUMN IF NOT EXISTS resolved_version TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_host_install_jobs_created ON host_install_jobs(created_at DESC);
 
 -- =====================================================================
@@ -1278,20 +1369,34 @@ CREATE TABLE IF NOT EXISTS finding_cases (
     origin_task_id BIGINT NOT NULL,
     title TEXT NOT NULL,
     reason TEXT NOT NULL,
+    root_cause_key TEXT NOT NULL DEFAULT '',
     severity TEXT NOT NULL DEFAULT '',
     severity_reason TEXT NOT NULL DEFAULT '',
     report TEXT NOT NULL DEFAULT '',
     version BIGINT NOT NULL DEFAULT 1,
     report_version BIGINT NOT NULL DEFAULT 0,
+    report_source_version BIGINT NOT NULL DEFAULT 0,
+    managed_by TEXT NOT NULL DEFAULT 'manual',
+    locked BOOLEAN NOT NULL DEFAULT true,
     active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE finding_cases ADD COLUMN IF NOT EXISTS root_cause_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE finding_cases ADD COLUMN IF NOT EXISTS report_source_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE finding_cases ADD COLUMN IF NOT EXISTS managed_by TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE finding_cases ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT true;
+UPDATE finding_cases
+SET report_source_version=version
+WHERE report_source_version=0 AND btrim(report)<>'';
 CREATE TABLE IF NOT EXISTS finding_case_members (
     finding_id BIGINT PRIMARY KEY REFERENCES findings(id) ON DELETE CASCADE,
     case_id BIGINT NOT NULL REFERENCES finding_cases(id),
     joined_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_finding_case_members_case ON finding_case_members(case_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_finding_cases_auto_root
+    ON finding_cases(task_id, root_cause_key)
+    WHERE active AND managed_by='auto' AND root_cause_key<>'';
 CREATE TABLE IF NOT EXISTS finding_case_events (
     id BIGSERIAL PRIMARY KEY,
     case_id BIGINT NOT NULL REFERENCES finding_cases(id),
@@ -1322,6 +1427,8 @@ CREATE TABLE IF NOT EXISTS finding_merge_jobs (
     ungrouped_finding_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     group_count INTEGER NOT NULL DEFAULT 0,
     mode TEXT NOT NULL DEFAULT 'cluster',
+    input_hash TEXT NOT NULL DEFAULT '',
+    attempts INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'queued',
     error TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1331,7 +1438,12 @@ ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS case_ids JSONB NOT NULL 
 ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS ungrouped_finding_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS group_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'cluster';
+ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS input_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE finding_merge_jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_finding_merge_jobs_task ON finding_merge_jobs(task_id, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_finding_merge_jobs_auto_hash
+    ON finding_merge_jobs(task_id, input_hash)
+    WHERE mode='auto' AND input_hash<>'';
 CREATE TABLE IF NOT EXISTS finding_case_blocks (
     left_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
     right_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,

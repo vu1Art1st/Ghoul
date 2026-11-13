@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/artex/agent"
+	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/hosttools"
 	"github.com/Autumn-27/artex/shared"
 )
@@ -187,18 +190,22 @@ func (s *Server) hostenvProxyCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 type sharedPublishRequest struct {
-	Name           string   `json:"name"`
-	Kind           string   `json:"kind"`
-	Description    string   `json:"description"`
-	Tags           []string `json:"tags"`
-	Language       string   `json:"language"`
-	Entrypoint     string   `json:"entrypoint"`
-	Usage          string   `json:"usage"`
-	Dependencies   []string `json:"dependencies"`
-	SourcePath     string   `json:"source_path"`
-	SourceTaskID   int64    `json:"source_task_id"`
-	SourceIntentID int64    `json:"source_intent_id"`
-	AssetID        int64    `json:"asset_id"`
+	Name           string          `json:"name"`
+	DisplayName    string          `json:"display_name"`
+	Kind           string          `json:"kind"`
+	Description    string          `json:"description"`
+	Tags           []string        `json:"tags"`
+	Language       string          `json:"language"`
+	Entrypoint     string          `json:"entrypoint"`
+	Usage          string          `json:"usage"`
+	Dependencies   []string        `json:"dependencies"`
+	RuntimeID      int64           `json:"runtime_id"`
+	RuntimeSpec    string          `json:"runtime_spec"`
+	Healthcheck    json.RawMessage `json:"healthcheck"`
+	SourcePath     string          `json:"source_path"`
+	SourceTaskID   int64           `json:"source_task_id"`
+	SourceIntentID int64           `json:"source_intent_id"`
+	AssetID        int64           `json:"asset_id"`
 }
 
 func (s *Server) sharedList(w http.ResponseWriter, r *http.Request) {
@@ -217,9 +224,10 @@ func (s *Server) sharedPublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := s.shared.Publish(r.Context(), shared.PublishInput{
-		Name: req.Name, Kind: req.Kind, Description: req.Description, Tags: req.Tags,
+		Name: req.Name, DisplayName: req.DisplayName, Kind: req.Kind, Description: req.Description, Tags: req.Tags,
 		Language: req.Language, Entrypoint: req.Entrypoint, Usage: req.Usage,
 		Dependencies: req.Dependencies, SourcePath: req.SourcePath,
+		RuntimeID: req.RuntimeID, RuntimeSpec: req.RuntimeSpec, Healthcheck: req.Healthcheck,
 		SourceTaskID: req.SourceTaskID, SourceIntentID: req.SourceIntentID, AssetID: req.AssetID,
 	})
 	if err != nil {
@@ -241,6 +249,46 @@ func (s *Server) sharedGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, a)
+}
+
+func (s *Server) sharedPatch(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var req struct {
+		DisplayName       *string   `json:"display_name"`
+		Description       *string   `json:"description"`
+		Tags              *[]string `json:"tags"`
+		Language          *string   `json:"language"`
+		Usage             *string   `json:"usage"`
+		Dependencies      *[]string `json:"dependencies"`
+		RuntimeSpec       *string   `json:"runtime_spec"`
+		ExpectedUpdatedAt string    `json:"expected_updated_at"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	patch := shared.AssetMetaPatch{
+		DisplayName: req.DisplayName, Description: req.Description, Tags: req.Tags,
+		Language: req.Language, Usage: req.Usage, Dependencies: req.Dependencies, RuntimeSpec: req.RuntimeSpec,
+	}
+	if strings.TrimSpace(req.ExpectedUpdatedAt) != "" {
+		expected, err := time.Parse(time.RFC3339Nano, req.ExpectedUpdatedAt)
+		if err != nil {
+			writeErr(w, 400, "expected_updated_at 格式无效")
+			return
+		}
+		patch.ExpectedUpdatedAt = expected
+	}
+	asset, err := s.shared.UpdateMeta(r.Context(), id, patch)
+	if errors.Is(err, db.ErrSharedAssetConflict) {
+		writeErr(w, 409, err.Error())
+		return
+	}
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, asset)
 }
 
 func (s *Server) sharedStatus(w http.ResponseWriter, r *http.Request) {
@@ -268,8 +316,78 @@ func (s *Server) sharedStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
+func (s *Server) sharedVersions(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	versions, err := s.shared.Versions(r.Context(), id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"versions": versions})
+}
+
+func (s *Server) sharedEvents(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	events, err := s.shared.Events(r.Context(), id)
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"events": events})
+}
+
+func sharedVersionParam(r *http.Request) int {
+	version, _ := strconv.Atoi(r.PathValue("version"))
+	if version < 0 {
+		return 0
+	}
+	return version
+}
+
+func (s *Server) sharedFiles(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	version := sharedVersionParam(r)
+	entries, path, err := s.shared.VersionFiles(r.Context(), id, version, r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"version": version, "path": path, "entries": entries})
+}
+
+func (s *Server) sharedFile(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	version := sharedVersionParam(r)
+	file, err := s.shared.ReadVersionFile(r.Context(), id, version, r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, file)
+}
+
+func (s *Server) sharedDownload(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	version := sharedVersionParam(r)
+	path, name, err := s.shared.VersionDownloadPath(r.Context(), id, version, r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, 404, err.Error())
+		return
+	}
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+sanitizeFilename(name)+"\"; filename*=UTF-8''"+url.PathEscape(name))
+	http.ServeFile(w, r, path)
+}
+
 func (s *Server) sharedPackages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.shared.PythonStatus())
+}
+
+func (s *Server) sharedRuntimeDoctor(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{
+		"task_runtime":  agent.ResolveRuntime(s.m.dir),
+		"shared_python": s.shared.PythonStatus(),
+		"tools":         hosttools.Inventory(agent.ResolveRuntime(s.m.dir).Python),
+	})
 }
 
 func (s *Server) sharedPackageInstall(w http.ResponseWriter, r *http.Request) {
@@ -281,6 +399,26 @@ func (s *Server) sharedPackageInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, err := s.installer.Start("python-package", req.Spec)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 202, job)
+}
+
+func (s *Server) sharedPackageInstallSystem(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Spec string `json:"spec"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := s.requireFailedSharedPackage(r.Context(), req.Spec); err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
+	job, err := s.installer.Start("python-package-system", req.Spec)
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return

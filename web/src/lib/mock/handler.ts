@@ -223,9 +223,9 @@ let nextMockTaskAssetID = D.tasks.length + 1;
 let mockActiveTask = D.ACTIVE_TASK;
 const mockSharedAssets: SharedAsset[] = [
   {
-    id: 1, name: "captcha-recognizer", kind: "tool" as const, description: "通用验证码识别入口，使用共享 ddddocr 运行时。",
+    id: 1, name: "captcha-recognizer", display_name: "验证码识别器", kind: "tool" as const, description: "通用验证码识别入口，使用共享 ddddocr 运行时。",
     tags: ["验证码", "OCR"], language: "python", entrypoint: "recognize.py",
-    usage: "$GHOUL_PYTHON recognize.py captcha.png", dependencies: ["ddddocr"], current_version: 2,
+    usage: "$GHOUL_PYTHON recognize.py captcha.png", dependencies: ["ddddocr"], healthcheck: {}, current_version: 2,
     status: "published" as const, source_task_id: 4, source_intent_id: 12,
     created_at: "2026-11-09T08:00:00Z", updated_at: "2026-11-10T08:00:00Z",
   },
@@ -1646,12 +1646,81 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     return { assets: mockSharedAssets.filter((a) => !query || `${a.name} ${a.description} ${a.tags.join(" ")}`.toLowerCase().includes(query)) };
   }
   if (path === "/shared/assets" && m === "POST") {
-    const input = b as { name: string; kind: "script" | "tool" | "library"; description: string; tags: string[]; language: string; entrypoint: string; usage: string; dependencies: string[]; source_path: string };
-    const asset = { ...input, id: mockSharedSequence++, current_version: 1, status: "published" as const, source_task_id: 0, source_intent_id: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    const input = b as { name: string; display_name?: string; kind: "script" | "tool" | "library"; description: string; tags: string[]; language: string; entrypoint: string; usage: string; dependencies: string[]; source_path: string };
+    const asset = { ...input, display_name: input.display_name || input.name, healthcheck: {}, id: mockSharedSequence++, current_version: 1, status: "published" as const, source_task_id: 0, source_intent_id: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
     mockSharedAssets.unshift(asset);
     return asset;
   }
+  if (seg[0] === "shared" && seg[1] === "assets" && seg[2] && !seg[3]) {
+    const asset = mockSharedAssets.find((item) => item.id === Number(seg[2]));
+    if (!asset) throw new Error("共享资产不存在");
+    if (m === "PATCH") {
+      Object.assign(asset, b, { updated_at: new Date().toISOString() });
+    }
+    return asset;
+  }
+  if (seg[0] === "shared" && seg[1] === "assets" && seg[3] === "versions" && !seg[4]) {
+    const asset = mockSharedAssets.find((item) => item.id === Number(seg[2]));
+    if (!asset) throw new Error("共享资产不存在");
+    return {
+      versions: Array.from({ length: asset.current_version }, (_, index) => ({
+        id: asset.id * 100 + index + 1,
+        asset_id: asset.id,
+        version: asset.current_version - index,
+        source_path: `tasks/${asset.source_task_id || 1}/shared/${asset.entrypoint}`,
+        content_hash: `demo-${asset.id}-${asset.current_version - index}`,
+        validation: { syntax: "manual_review_required", files: 1 },
+        created_at: asset.updated_at,
+      })),
+    };
+  }
+  if (seg[0] === "shared" && seg[1] === "assets" && seg[3] === "versions" && seg[5] === "files") {
+    const asset = mockSharedAssets.find((item) => item.id === Number(seg[2]));
+    if (!asset) throw new Error("共享资产不存在");
+    return {
+      version: Number(seg[4]),
+      path: q.get("path") ?? "",
+      entries: [{ name: asset.entrypoint, path: asset.entrypoint, dir: false, size: 42, modified_at: asset.updated_at }],
+    };
+  }
+  if (seg[0] === "shared" && seg[1] === "assets" && seg[3] === "versions" && seg[5] === "file") {
+    const asset = mockSharedAssets.find((item) => item.id === Number(seg[2]));
+    if (!asset) throw new Error("共享资产不存在");
+    return {
+      path: q.get("path") ?? asset.entrypoint,
+      size: 42,
+      binary: false,
+      too_large: false,
+      content: "print('shared demo asset')\n",
+      modified_at: asset.updated_at,
+    };
+  }
+  if (seg[0] === "shared" && seg[1] === "assets" && seg[3] === "events") {
+    return { events: [] };
+  }
   if (path === "/shared/packages") return { available: true, interpreter: "/app/data/shared/python/venv/bin/python", packages: [{ name: "ddddocr", version: "1.5.6" }, { name: "requests", version: "2.32.5" }] };
+  if (path === "/shared/runtime/doctor") {
+    return {
+      task_runtime: {
+        shared_dir: "/app/data/shared",
+        python: "/app/data/shared/python/venvs/default/bin/python",
+        python_source: "shared" as const,
+        uv: "/app/data/shared/python/uv/bin/uv",
+        mise: "/app/data/shared/mise/shims/mise",
+        fallback: false,
+      },
+      shared_python: {
+        available: true,
+        interpreter: "/app/data/shared/python/venvs/default/bin/python",
+        manager: "uv",
+        uv: "/app/data/shared/python/uv/bin/uv",
+        mise: "/app/data/shared/mise/shims/mise",
+        system_python: "/usr/local/bin/python",
+        packages: [{ name: "ddddocr", version: "1.5.6" }, { name: "requests", version: "2.32.5" }],
+      },
+      tools: [],
+    };
+  }
   if (path === "/shared/packages/install" || path === "/hostenv/install" || path === "/hostenv/install-batch") {
     const input = b as { spec?: string; id?: string; ids?: string[] };
     const job = { id: `demo-install-${mockInstallSequence++}`, kind: path.includes("packages") ? "python-package" : "tool", target: input.spec ?? input.id ?? input.ids?.[0] ?? "", state: "queued", error: "", exit_code: 0, log: "", created_at: new Date().toISOString() };

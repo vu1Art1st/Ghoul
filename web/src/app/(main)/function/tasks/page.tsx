@@ -132,6 +132,7 @@ import type {
   TaskArchive,
   TaskArchiveState,
   TaskCategory,
+  TaskRelationSuggestion,
   TaskStatus,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -163,6 +164,14 @@ function appendUploads(desc: string, atts: ChatAttachment[]): string {
 // worker), so the list has to be pulled; 10s is plenty for status / 进度 / token 变化.
 const POLL_MS = 10_000;
 const MAX_SOURCE_TASKS = 8;
+
+function relationSuggestionTarget(text: string): string {
+  const matches =
+    text.match(
+      /(?:https?:\/\/)?(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::\d{1,5})?|\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
+    ) ?? [];
+  return Array.from(new Set(matches)).slice(0, 3).join(" ");
+}
 
 // fmtTokens renders a compact token count (1234 → 1.2k, 2_000_000 → 2M).
 function fmtTokens(n: number): string {
@@ -3080,6 +3089,8 @@ function CreateTaskSheet({
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [companies, setCompanies] = React.useState<Company[]>([]);
   const [sourceTaskIDs, setSourceTaskIDs] = React.useState<string[]>([]);
+  const [relationSuggestions, setRelationSuggestions] = React.useState<TaskRelationSuggestion[]>([]);
+  const [relationSuggestionsLoading, setRelationSuggestionsLoading] = React.useState(false);
   const [companyIDs, setCompanyIDs] = React.useState<number[]>([]);
   const [llmProfileIDs, setLLMProfileIDs] = React.useState<string[]>([]);
   const [creating, setCreating] = React.useState(false);
@@ -3106,6 +3117,42 @@ function CreateTaskSheet({
       .then(setCompanies)
       .catch(() => setCompanies([]));
   }, []);
+
+  React.useEffect(() => {
+    if (!open) {
+      setRelationSuggestions([]);
+      setRelationSuggestionsLoading(false);
+      return;
+    }
+    const text = `${description}\n${goal}`.trim();
+    if (text.length < 3) {
+      setRelationSuggestions([]);
+      setRelationSuggestionsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setRelationSuggestionsLoading(true);
+      api
+        .taskRelationSuggestions({
+          q: text.slice(0, 1200),
+          target: relationSuggestionTarget(text),
+        })
+        .then((items) => {
+          if (!cancelled) setRelationSuggestions(items);
+        })
+        .catch(() => {
+          if (!cancelled) setRelationSuggestions([]);
+        })
+        .finally(() => {
+          if (!cancelled) setRelationSuggestionsLoading(false);
+        });
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [description, goal, open]);
 
   // pickFiles uploads the chosen files into this draft's staging dir and appends their
   // absolute paths to the description; the task's agents open them by path via Read/Bash.
@@ -3165,6 +3212,7 @@ function CreateTaskSheet({
       setGoal("");
       setSelectedTemplateID(null);
       setSourceTaskIDs([]);
+      setRelationSuggestions([]);
       setCompanyIDs([]);
       setLLMProfileIDs([]);
       setTimeoutMin("");
@@ -3293,6 +3341,50 @@ function CreateTaskSheet({
                 onValueChange={setSourceTaskIDs}
                 portalContainer={sheetContentRef}
               />
+              {(relationSuggestionsLoading || relationSuggestions.length > 0) && (
+                <div className="border-y">
+                  {relationSuggestionsLoading && relationSuggestions.length === 0 && (
+                    <div className="text-muted-foreground flex items-center gap-2 px-3 py-2 text-xs">
+                      <Loader2Icon className="size-3.5 animate-spin" />
+                      正在查找可关联的历史任务
+                    </div>
+                  )}
+                  {relationSuggestions.map((suggestion) => {
+                    const selected = sourceTaskIDs.includes(String(suggestion.task_id));
+                    const atLimit = sourceTaskIDs.length >= MAX_SOURCE_TASKS;
+                    return (
+                      <div
+                        key={suggestion.task_id}
+                        className="flex items-start gap-3 border-b px-3 py-2 last:border-b-0"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">
+                            #{suggestion.task_id} · {suggestion.name || suggestion.goal || "历史任务"}
+                          </p>
+                          <p className="text-muted-foreground line-clamp-1 text-xs">
+                            {suggestion.reason} · 置信度 {Math.round(suggestion.confidence * 100)}%
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant={selected ? "secondary" : "outline"}
+                          disabled={selected || atLimit}
+                          onClick={() =>
+                            setSourceTaskIDs((current) =>
+                              current.includes(String(suggestion.task_id))
+                                ? current
+                                : [...current, String(suggestion.task_id)].slice(0, MAX_SOURCE_TASKS),
+                            )
+                          }
+                        >
+                          {selected ? "已关联" : atLimit ? "已达上限" : "关联"}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <FieldDescription>
                 最多关联 {MAX_SOURCE_TASKS}{" "}
                 个任务。实时只读继承所选任务的持久化黑板、资产范围及相关流量；新任务写入独立黑板。

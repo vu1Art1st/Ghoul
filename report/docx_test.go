@@ -83,6 +83,12 @@ func TestDocxStructure(t *testing.T) {
 	}
 }
 
+func TestZeroTimeFormatsAsDash(t *testing.T) {
+	if got := FormatTimeUTC(time.Time{}); got != "-" {
+		t.Fatalf("zero time=%q want dash", got)
+	}
+}
+
 func TestBuildTaskDocxAndFindingDocx(t *testing.T) {
 	f := &db.DBFinding{
 		ID: 42, VulnClass: "未授权访问", Name: "Admin console exposed",
@@ -161,6 +167,48 @@ func TestBuildTaskDocxAndFindingDocx(t *testing.T) {
 	}
 }
 
+func TestTaskDocxDistinguishesCasesAndRawFindings(t *testing.T) {
+	f := &db.DBFinding{
+		ID: -9, VulnClass: "same sink", Name: "same sink", Severity: "high",
+		Summary: "two raw findings", Evidence: "REPEATED_EVIDENCE_SHOULD_NOT_RENDER",
+		Report: "## 证据\n\nbinding 27 shows the reflected script", FindingCount: 2,
+		CreatedAt: time.Now(), Worker: "work#1, work#3",
+	}
+	in := TaskDocxInput{
+		Title: "渗透测试报告", GeneratedAt: time.Now(),
+		Findings:       []*db.DBFinding{f},
+		FindingCount:   3,
+		CaseCount:      2,
+		SeverityCounts: map[string]int{"high": 2, "medium": 1},
+	}
+	var buf bytes.Buffer
+	if err := BuildTaskDocx(in).Encode(&buf); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc string
+	for _, zf := range zr.File {
+		if zf.Name == "word/document.xml" {
+			rc, _ := zf.Open()
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(rc)
+			rc.Close()
+			doc = b.String()
+		}
+	}
+	for _, frag := range []string{"漏洞总数:3", "归并后 2 组", "共 2 条", "归并 Finding:2 条"} {
+		if !strings.Contains(doc, frag) {
+			t.Errorf("document.xml missing %q", frag)
+		}
+	}
+	if strings.Contains(doc, "REPEATED_EVIDENCE_SHOULD_NOT_RENDER") {
+		t.Error("structured evidence was duplicated after a report evidence section")
+	}
+}
+
 // TestDocxBulletNumbering A1：包里必须有 numbering.xml 且 numId=1 存在——
 // 此前缺该部件导致 Word 里项目符号静默不渲染。
 func TestDocxBulletNumbering(t *testing.T) {
@@ -188,6 +236,9 @@ func TestDocxBulletNumbering(t *testing.T) {
 	}
 	if !strings.Contains(num, `<w:num w:numId="1">`) {
 		t.Error("numbering.xml missing <w:num w:numId=1>")
+	}
+	if strings.Contains(num, `w:ascii="Symbol"`) || !strings.Contains(num, `w:ascii="Arial"`) {
+		t.Error("bullet numbering still uses the Symbol font mapping")
 	}
 	rels := found["word/_rels/document.xml.rels"]
 	if !strings.Contains(rels, "numbering.xml") {
@@ -229,10 +280,12 @@ func TestWriteMarkdownishRich(t *testing.T) {
 		}
 	}
 	for _, frag := range []string{
-		"<w:tbl>",  // 表格真 OOXML 化
-		"<w:b/>",   // 加粗 run
-		"Heading2", // ## → 公文二级楷体标题（不再压平到 H3）
-		"w:numId",  // bullet 编号引用
+		"<w:tbl>",      // 表格真 OOXML 化
+		"<w:b/>",       // 加粗 run
+		"BodyHeading2", // ## → 不进 TOC 的正文二级标题
+		"w:numId",      // bullet 编号引用
+		"<w:tblHeader/>",
+		"<w:cantSplit/>",
 	} {
 		if !strings.Contains(doc, frag) {
 			t.Errorf("document.xml missing %q", frag)

@@ -84,8 +84,10 @@ import type {
   NotificationDelivery,
   NotificationFilter,
   NotificationMeta,
+  PocRecord,
   PromptVar,
   PromptVersion,
+  RuntimeDoctor,
   SessionTokenUsage,
   Settings,
   Severity,
@@ -104,6 +106,7 @@ import type {
   TaskGoal,
   TaskLLMResolutions,
   TaskNode,
+  TaskRelationSuggestion,
   TaskScopeRow,
   TaskTemplate,
   TokenTotal,
@@ -126,7 +129,12 @@ import type {
   HostenvStatus,
   PythonPackage,
   SharedAsset,
+  SharedAssetEvent,
+  SharedAssetFile,
+  SharedAssetFileEntry,
+  SharedAssetMetaPatch,
   SharedPublishInput,
+  SharedAssetVersion,
 } from "@/lib/types";
 
 function getToken(): string | null {
@@ -536,16 +544,53 @@ export const api = {
     post<{ ok: boolean; error?: string; status?: number; latency_ms?: number }>("/hostenv/proxy-check", { proxy }),
   sharedAssets: (query = "") => get<{ assets: SharedAsset[] | null }>(`/shared/assets?q=${encodeURIComponent(query)}`).then((r) => arr(r.assets)),
   sharedAsset: (id: number) => get<SharedAsset>(`/shared/assets/${id}`),
+  sharedPatchAsset: (id: number, input: SharedAssetMetaPatch) =>
+    http<SharedAsset>(`/shared/assets/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   sharedPublish: (input: SharedPublishInput) => post<SharedAsset>("/shared/assets", input),
   sharedStatus: (id: number, status: "published" | "disabled") =>
     post<{ ok: boolean }>(`/shared/assets/${id}/status`, { status }),
+  sharedVersions: (id: number) =>
+    get<{ versions: SharedAssetVersion[] | null }>(`/shared/assets/${id}/versions`).then((r) => arr(r.versions)),
+  sharedFiles: (id: number, version: number, path = "") =>
+    get<{ version: number; path: string; entries: SharedAssetFileEntry[] | null }>(
+      `/shared/assets/${id}/versions/${version}/files?path=${encodeURIComponent(path)}`,
+    ).then((r) => ({ ...r, entries: arr(r.entries) })),
+  sharedFile: (id: number, version: number, path: string) =>
+    get<SharedAssetFile>(`/shared/assets/${id}/versions/${version}/file?path=${encodeURIComponent(path)}`),
+  sharedDownload: (id: number, version: number, path: string) =>
+    downloadFile(
+      `/shared/assets/${id}/versions/${version}/download?path=${encodeURIComponent(path)}`,
+      path.split("/").pop() || "shared-asset",
+    ),
+  sharedEvents: (id: number) =>
+    get<{ events: SharedAssetEvent[] | null }>(`/shared/assets/${id}/events`).then((r) => arr(r.events)),
   sharedPackages: () =>
     get<{ available: boolean; interpreter: string; packages: PythonPackage[] | null }>("/shared/packages").then((r) => ({
       ...r,
       packages: arr(r.packages),
     })),
   sharedPackageInstall: (spec: string) => post<HostInstallJob>("/shared/packages/install", { spec }),
+  sharedPackageInstallSystem: (spec: string) => post<HostInstallJob>("/shared/packages/install-system", { spec }),
   sharedPackageRemove: (name: string) => del<HostInstallJob>(`/shared/packages?name=${encodeURIComponent(name)}`),
+  sharedRuntimeDoctor: () => get<RuntimeDoctor>("/shared/runtime/doctor"),
+  knowledgePocs: (q = "") =>
+    get<{ items: PocRecord[] | null }>(`/knowledge/pocs?q=${encodeURIComponent(q)}`).then((r) => arr(r.items)),
+  knowledgePocCreate: (input: PocRecord) => post<PocRecord>("/knowledge/pocs", input),
+  knowledgePocVerify: (id: number, status = "verified") =>
+    post<PocRecord>(`/knowledge/pocs/${id}/verify`, { status }),
+  knowledgePocMaterialize: (id: number, taskId: number, version = 0) =>
+    post<{ entrypoint: string }>(`/knowledge/pocs/${id}/materialize`, { task_id: taskId, version }),
+  taskRelationSuggestions: (input: { taskId?: number; q?: string; target?: string; product?: string; component?: string }) => {
+    const q = new URLSearchParams();
+    if (input.taskId) q.set("task_id", String(input.taskId));
+    if (input.q) q.set("q", input.q);
+    if (input.target) q.set("target", input.target);
+    if (input.product) q.set("product", input.product);
+    if (input.component) q.set("component", input.component);
+    return get<{ items: TaskRelationSuggestion[] | null }>(`/knowledge/tasks/suggest?${q.toString()}`).then(
+      (r) => arr(r.items),
+    );
+  },
 
   // ---- assets ----
   // Server-side paginated: pass limit/offset, get back the page + full match total.
@@ -824,8 +869,20 @@ export const api = {
     }),
   findingMergeJob: (id: string) =>
     get<FindingMergeJob>(`/exploration/finding-cases/agent-jobs/${encodeURIComponent(id)}`),
+  latestAutoFindingMergeJob: (taskId: string) =>
+    get<{ job: FindingMergeJob | null }>(
+      `/exploration/finding-cases/agent-jobs?task=${encodeURIComponent(taskId)}`,
+    ),
   regenerateFindingCase: (id: string) =>
     post<FindingMergeJob>(`/exploration/finding-cases/${encodeURIComponent(id)}/regenerate`, {}),
+  addFindingCaseMembers: (
+    id: string,
+    input: { finding_ids: number[]; expected_version: number; reason: string; regenerate: boolean },
+  ) =>
+    post<{ case: FindingCase; version: string; job: FindingMergeJob | null }>(
+      `/exploration/finding-cases/${encodeURIComponent(id)}/members`,
+      input,
+    ),
   updateFindingCase: (
     id: string,
     input: { version: number; title: string; report: string; severity: Severity; reason: string },
