@@ -2050,6 +2050,8 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.killWorkTool(), t.steerWorkTool(),
 		// report_finding：规划态势研判时若自身已确证漏洞，可直接登记（与 worker 同工具）。
 		t.addFinding(),
+		t.captureFindingScreenshot(),
+		t.saveFindingScreenshot(),
 		// list_companies：查看企业列表 + scope + 资产数（拿 company_id / 理解归属范围）。
 		t.listCompanies(),
 		// list_assets：规划时按 DSL 检索全资产库（配合 list_untested_assets 的"范围内未测"视角，

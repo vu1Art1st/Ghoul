@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,33 @@ func TestFindingEvidenceImageKindsCoverC2Screenshots(t *testing.T) {
 		if findingEvidenceIsImage(kind) {
 			t.Fatalf("kind %q must not be embedded as an image", kind)
 		}
+	}
+}
+
+func TestFindingEvidenceTrustCaption(t *testing.T) {
+	if got := findingEvidenceTrustCaption(`{"provenance":"native_action_rewrite"}`, "IDOR proof"); got != "IDOR proof" {
+		t.Fatalf("trusted caption=%q", got)
+	}
+	if got := findingEvidenceTrustCaption(`{"provenance":"navigation_replay"}`, "JSON replay"); got != "导航重放截图：JSON replay" {
+		t.Fatalf("navigation replay caption=%q", got)
+	}
+	if got := findingEvidenceTrustCaption(`{"provenance":"raw_http_exchange"}`, "HTTP proof"); got != "原始 HTTP 交换证据：HTTP proof" {
+		t.Fatalf("raw exchange caption=%q", got)
+	}
+	if got := findingEvidenceTrustCaption(`{"provenance":"unverified_file"}`, "custom render"); got != "待核验截图：custom render" {
+		t.Fatalf("unverified caption=%q", got)
+	}
+	if got := findingEvidenceTrustCaption(`{"source":"c2"}`, "host screenshot"); got != "host screenshot" {
+		t.Fatalf("c2 caption=%q", got)
+	}
+	if got := findingEvidenceTrustCaption(`{}`, ""); got != "待核验截图" {
+		t.Fatalf("empty unverified caption=%q", got)
+	}
+	if findingEvidenceReportAllowed(`{"source":"agent_screenshot","provenance":"unverified_file"}`) {
+		t.Fatal("unverified agent file must not enter automatic reports")
+	}
+	if !findingEvidenceReportAllowed(`{"provenance":"raw_http_exchange"}`) {
+		t.Fatal("raw HTTP exchange evidence should remain reportable with explicit provenance")
 	}
 }
 
@@ -100,7 +128,7 @@ func TestReportExportWarningsPreserveAutonomousOutcome(t *testing.T) {
 		[]report.CaseView{{Case: db.FindingCase{ID: 7, ReportStale: true}}},
 	)
 	joined := strings.Join(warnings, "\n")
-	for _, want := range []string{"Finding #1", "版本落后", "Finding #2", "漏洞组 #7"} {
+	for _, want := range []string{"Finding #1", "版本落后", "Finding #2", "漏洞组 #7", "不符合交付结构"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("warnings=%q missing %q", joined, want)
 		}
@@ -224,8 +252,12 @@ func TestReconcileAutoFindingMergeRunsCompletedTask(t *testing.T) {
 					return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{llm.TextBlock(body)}},
 						"end_turn", llm.Usage{}, nil
 				}
+				body, _ := json.Marshal(findingMergeAgentResult{
+					Title: "auth bypass", Reason: "same auth root", Severity: db.SeverityHigh,
+					SeverityReason: "anonymous", Report: validHTTPDeliveryReport("同一鉴权入口缺失校验导致越权"),
+				})
 				return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
-					llm.TextBlock(`{"title":"auth bypass","reason":"same auth root","severity":"high","severity_reason":"anonymous","report":"## report"}`),
+					llm.TextBlock(string(body)),
 				}}, "end_turn", llm.Usage{}, nil
 			}},
 			cfg: agent.Config{Model: "test-model"},

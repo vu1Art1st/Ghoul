@@ -842,6 +842,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/exploration/findings/{id}/dispatch", s.dispatchFinding)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/evidence", s.findingEvidenceTimeline)
 	mux.HandleFunc("POST /api/exploration/findings/{id}/evidence", s.addFindingEvidence)
+	mux.HandleFunc("GET /api/exploration/findings/{id}/evidence/{evidenceId}/content", s.findingEvidenceContent)
 	mux.HandleFunc("DELETE /api/exploration/findings/{id}/evidence/{evidenceId}", s.deleteFindingEvidence)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/retests", s.listFindingRetests)
 	mux.HandleFunc("GET /api/exploration/findings/retests/active", s.listActiveFindingRetests)
@@ -4022,27 +4023,38 @@ func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "no active task")
 		return
 	}
-	findings, _ := t.Store.ListByKind(db.KindFinding, 1000) // 纯漏洞（事实是独立的 KindFact，不进报告）
 	taskNum, _ := strconv.ParseInt(t.ID, 10, 64)
+	// Prefer the persisted finding rows: they contain the detailed report written
+	// by the reporter. Exploration nodes only carry the original summary/PoC, so
+	// rendering them directly silently drops the delivery sections.
+	detailed, err := s.m.pg.ListFindingsForExport(db.FindingFilter{
+		TaskID: t.ID, ExcludeStatuses: exportExcludeStatuses,
+	}, nil)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
 	caseViews, caseMemberIDs, caseErr := s.activeFindingCaseViews(r.Context(), taskNum)
 	if caseErr != nil {
 		writeErr(w, 500, caseErr.Error())
 		return
 	}
 	if len(caseMemberIDs) > 0 {
-		meta, err := s.m.pg.FindingMetaByNodeID(taskNum)
-		if err != nil {
-			writeErr(w, 500, err.Error())
-			return
-		}
-		filtered := findings[:0]
-		for _, finding := range findings {
-			if item, ok := meta[finding.ID]; ok && caseMemberIDs[item.ID] {
+		filtered := detailed[:0]
+		for _, finding := range detailed {
+			if finding != nil && caseMemberIDs[finding.ID] {
 				continue
 			}
 			filtered = append(filtered, finding)
 		}
-		findings = filtered
+		detailed = filtered
+	}
+	warnings := reportExportWarnings(detailed, caseViews)
+	// Legacy tasks may not have a persisted finding row yet. Fall back to graph
+	// findings so their report tab does not become empty.
+	var graphFindings []*db.Node
+	if len(detailed) == 0 && len(caseViews) == 0 {
+		graphFindings, _ = t.Store.ListByKind(db.KindFinding, 1000)
 	}
 	counts := map[string]int{}
 	for _, ty := range []string{"root_domain", "ip", "subdomain", "app", "service", "endpoint"} {
@@ -4053,7 +4065,8 @@ func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
 	}
 	md := report.Markdown(report.Input{
 		Title: t.Description, Goal: t.Goal, GeneratedAt: time.Now(),
-		AssetCounts: counts, Findings: findings, Cases: caseViews,
+		AssetCounts: counts, Findings: graphFindings, DetailedFindings: detailed,
+		Cases: caseViews, Warnings: warnings,
 	})
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)

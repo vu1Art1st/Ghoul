@@ -611,6 +611,8 @@ func BuildFindingDocx(in FindingDocxInput) *Docx {
 func writeMarkdownish(d *Docx, md string) {
 	lines := strings.Split(strings.ReplaceAll(md, "\r\n", "\n"), "\n")
 	inCode := false
+	numbers := &gongwenHeadingNumbers{}
+	seenBody := false
 	// 表格块收集：连续的 | 开头行
 	var tableBuf []string
 	flushTable := func() {
@@ -685,11 +687,28 @@ func writeMarkdownish(d *Docx, md string) {
 		}
 		switch {
 		case strings.HasPrefix(trimmed, "### "):
-			d.bodyHeading(strings.TrimPrefix(trimmed, "### "), 3)
+			d.bodyHeading(numbers.next(2, strings.TrimPrefix(trimmed, "### ")), 2)
+			seenBody = true
 		case strings.HasPrefix(trimmed, "## "):
-			d.bodyHeading(strings.TrimPrefix(trimmed, "## "), 2)
+			d.bodyHeading(numbers.next(1, strings.TrimPrefix(trimmed, "## ")), 1)
+			seenBody = true
 		case strings.HasPrefix(trimmed, "# "):
-			d.bodyHeading(strings.TrimPrefix(trimmed, "# "), 1)
+			// Model reports usually start with a duplicate document title. The
+			// generated DOCX already has a cover/title, so drop only that leading
+			// H1 and treat the remaining Markdown headings as the body hierarchy.
+			title := strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
+			if !seenBody && looksLikeReportTitle(title) {
+				seenBody = true
+				continue
+			}
+			d.bodyHeading(numbers.next(1, title), 1)
+		case strings.HasPrefix(trimmed, "#### "):
+			d.bodyHeading(numbers.next(3, strings.TrimPrefix(trimmed, "#### ")), 3)
+			seenBody = true
+		case strings.HasPrefix(trimmed, "##### "), strings.HasPrefix(trimmed, "###### "):
+			text := strings.TrimLeft(trimmed, "#")
+			d.bodyHeading(numbers.next(4, strings.TrimSpace(text)), 4)
+			seenBody = true
 		case strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* "):
 			// 嵌套列表：行首每 2 个空格一级（reporter 常写二级清单），ilvl 交给
 			// numbering.xml 的多级定义；压平会让层级关系全丢（v0.4.0）。
@@ -708,18 +727,31 @@ func writeMarkdownish(d *Docx, md string) {
 			// 「一、排查经过」（黑体一级）与「（一）现场证据采集。」（楷体二级），
 			// 短行按标题排版，长行仍按正文（避免误伤带内容的段落）。
 			if gongwenHeiRe.MatchString(trimmed) && len([]rune(trimmed)) <= 40 {
-				d.bodyHeading(trimmed, 1)
+				d.bodyHeading(numbers.next(1, trimmed), 1)
+				seenBody = true
 				continue
 			}
 			if gongwenKaiRe.MatchString(trimmed) && len([]rune(trimmed)) <= 30 {
-				d.bodyHeading(trimmed, 2)
+				d.bodyHeading(numbers.next(2, trimmed), 2)
+				seenBody = true
 				continue
 			}
 			d.PRich(trimmed)
+			seenBody = true
 		}
 	}
 	flushTable()
 	flushCode()
+}
+
+func looksLikeReportTitle(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	for _, marker := range []string{"报告", "渗透测试", "安全评估", "security assessment", "pentest report"} {
+		if strings.Contains(text, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
 }
 
 // markdownHasEvidenceSection reports whether the model-authored report already
@@ -749,9 +781,63 @@ func markdownHasEvidenceSection(md string) bool {
 var (
 	gongwenHeiRe = regexp.MustCompile(`^[一二三四五六七八九十]{1,3}、`)
 	gongwenKaiRe = regexp.MustCompile(`^（[一二三四五六七八九十]{1,3}）`)
+	headingNoRe  = regexp.MustCompile(`^\s*(?:[一二三四五六七八九十百]+、|（[一二三四五六七八九十百]+）|（\d+）|\(\d+\)|\d+(?:\.\d+)+[.、]?\s*|\d+[.、]\s*|\d+\s+)`)
 	// artRe 匹配报告里的证据图片引用：![说明](artifact:12)
 	artRe = regexp.MustCompile(`^!\[(.*?)\]\(artifact:(\d+)\)$`)
 )
+
+type gongwenHeadingNumbers struct {
+	counts [4]int
+}
+
+func (n *gongwenHeadingNumbers) next(level int, text string) string {
+	if level < 1 {
+		level = 1
+	}
+	if level > 4 {
+		level = 4
+	}
+	text = strings.TrimSpace(headingNoRe.ReplaceAllString(strings.TrimSpace(text), ""))
+	n.counts[level-1]++
+	for i := level; i < len(n.counts); i++ {
+		n.counts[i] = 0
+	}
+	value := n.counts[level-1]
+	switch level {
+	case 1:
+		return chineseSectionNumber(value) + "、" + text
+	case 2:
+		return "（" + chineseSectionNumber(value) + "）" + text
+	case 3:
+		return fmt.Sprintf("%d. %s", value, text)
+	default:
+		return fmt.Sprintf("（%d）%s", value, text)
+	}
+}
+
+func chineseSectionNumber(n int) string {
+	digits := []string{"零", "一", "二", "三", "四", "五", "六", "七", "八", "九"}
+	if n <= 0 {
+		return digits[0]
+	}
+	if n < 10 {
+		return digits[n]
+	}
+	if n < 20 {
+		if n == 10 {
+			return "十"
+		}
+		return "十" + digits[n%10]
+	}
+	if n < 100 {
+		out := digits[n/10] + "十"
+		if n%10 != 0 {
+			out += digits[n%10]
+		}
+		return out
+	}
+	return fmt.Sprintf("%d", n)
+}
 
 // splitMarkdownRow 拆一行 | a | b | → [a, b]。
 func splitMarkdownRow(ln string) []string {

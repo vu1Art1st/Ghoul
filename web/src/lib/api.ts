@@ -244,7 +244,7 @@ function mockReport(_task?: string): string {
 > （demo）本报告由 mock 数据生成，仅用于界面演示。`;
 }
 
-export function sseUrl(path: string): string {
+function protectedUrl(path: string): string {
   const base =
     process.env.NEXT_PUBLIC_SSE_BASE ??
     (process.env.NODE_ENV !== "production" && typeof window !== "undefined"
@@ -253,6 +253,10 @@ export function sseUrl(path: string): string {
   const token = getToken();
   const sep = path.includes("?") ? "&" : "?";
   return token ? `${base}${path}${sep}token=${encodeURIComponent(token)}` : `${base}${path}`;
+}
+
+export function sseUrl(path: string): string {
+  return protectedUrl(path);
 }
 
 const get = <T>(p: string) => http<T>(p);
@@ -802,6 +806,10 @@ export const api = {
     }),
   findingEvidence: (id: string) =>
     get<FindingEvidenceTimeline>(`/exploration/findings/${encodeURIComponent(id)}/evidence`),
+  findingEvidenceContentUrl: (id: string, evidenceId: string) =>
+    protectedUrl(
+      `/api/exploration/findings/${encodeURIComponent(id)}/evidence/${encodeURIComponent(evidenceId)}/content`,
+    ),
   addFindingEvidence: (
     id: string,
     input: {

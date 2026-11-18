@@ -10,6 +10,8 @@ import (
 // evidence bodies themselves. Its implementation owns the atomic write.
 type FindingRecorder interface {
 	Record(context.Context, db.RecordFindingInput, []db.TrafficRef) (*db.RecordedFinding, error)
+	RecordFindingScreenshot(context.Context, db.FindingScreenshotInput) (*db.FindingEvidence, error)
+	CaptureFindingScreenshot(context.Context, db.FindingScreenshotCaptureInput) (*db.FindingEvidence, error)
 }
 
 // Tool-use guidance is appended without replacing the user's editable prompt.

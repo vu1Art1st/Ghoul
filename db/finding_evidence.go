@@ -28,6 +28,53 @@ type FindingEvidence struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
+// FindingScreenshotInput describes one real browser screenshot captured in an
+// intent workspace and attached to an existing Finding. The evidence store owns
+// reading, validation and encoding; callers only identify the file.
+type FindingScreenshotInput struct {
+	TaskID    int64
+	FindingID int64
+	RunDir    string
+	Path      string
+	Title     string
+	SourceURL string
+	Note      string
+}
+
+const (
+	FindingCaptureNativeAction     = "native_action"
+	FindingCaptureNavigationReplay = "navigation_replay"
+	FindingCaptureRawHTTPExchange  = "raw_http_exchange"
+)
+
+// FindingScreenshotCaptureInput asks the host to drive the real browser itself:
+// open the original page, intercept the application's request, rewrite only the
+// scoped parameter/header, let the page's own JavaScript render the response, and
+// capture the resulting DOM. This avoids agent-authored full-page replacements.
+type FindingScreenshotCaptureInput struct {
+	TaskID               int64
+	FindingID            int64
+	RunDir               string
+	Mode                 string
+	PageURL              string
+	PreconditionSelector string
+	ActionSelector       string
+	WaitSelector         string
+	WaitText             string
+	PrepareJS            string
+	RouteMatch           string
+	HTTPMethod           string
+	RequestBody          string
+	ContentType          string
+	Query                map[string]string
+	Headers              map[string]string
+	TrafficID            string
+	Title                string
+	Note                 string
+	SourceURL            string
+	FullPage             bool
+}
+
 const findingEvidenceCols = `id,finding_id,kind,title,content,storage_ref,sha256,size,redacted,metadata_json,created_at`
 
 func scanFindingEvidence(row interface{ Scan(...any) error }) (*FindingEvidence, error) {
@@ -59,6 +106,19 @@ func (d *DB) ListFindingEvidence(ctx context.Context, findingID int64) ([]Findin
 	return out, rows.Err()
 }
 
+// GetFindingEvidence returns one evidence row only when it belongs to findingID.
+func (d *DB) GetFindingEvidence(ctx context.Context, findingID, evidenceID int64) (*FindingEvidence, error) {
+	if findingID <= 0 || evidenceID <= 0 {
+		return nil, ErrEvidenceNotFound
+	}
+	item, err := scanFindingEvidence(d.QueryRowContext(ctx, `SELECT `+findingEvidenceCols+`
+		FROM finding_evidence WHERE id=$1 AND finding_id=$2`, evidenceID, findingID))
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && item == nil) {
+		return nil, ErrEvidenceNotFound
+	}
+	return item, err
+}
+
 // AddFindingEvidence performs optimistic version checking and evidence append
 // atomically. expectedVersion nil means the caller intentionally skips CAS.
 func (d *DB) AddFindingEvidence(ctx context.Context, findingID int64, expectedVersion *int64, actor, reason string, item FindingEvidence) (*FindingEvidence, int64, error) {
@@ -76,10 +136,12 @@ func (d *DB) AddFindingEvidence(ctx context.Context, findingID int64, expectedVe
 	if strings.TrimSpace(item.Content) == "" && strings.TrimSpace(item.StorageRef) == "" {
 		return nil, 0, errors.New("证据 content 或 storage_ref 至少提供一项")
 	}
-	item.Size = int64(len(item.Content))
-	if item.Size > 0 {
+	if strings.TrimSpace(item.Content) != "" {
+		item.Size = int64(len(item.Content))
 		sum := sha256.Sum256([]byte(item.Content))
 		item.SHA256 = hex.EncodeToString(sum[:])
+	} else if item.Size < 0 {
+		return nil, 0, errors.New("证据 size 不能为负")
 	}
 	if len(item.MetadataJSON) == 0 {
 		item.MetadataJSON = json.RawMessage(`{}`)

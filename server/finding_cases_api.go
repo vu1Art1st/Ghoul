@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/report"
 	"github.com/Autumn-27/norma/llm"
 )
 
@@ -253,6 +254,10 @@ func (s *Server) updateFindingCase(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decode(r, &req); err != nil {
 		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := report.ValidateDeliveryReportAuto(req.Report); err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, "统一报告未通过交付结构校验: "+err.Error())
 		return
 	}
 	if err := s.m.pg.UpdateFindingCaseReport(r.Context(), id, req.Version, req.Title, req.Report, req.Severity, req.Reason); err != nil {

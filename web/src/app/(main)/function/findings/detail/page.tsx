@@ -205,6 +205,7 @@ function FindingDetailInner() {
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">{finding.summary || "（无摘要）"}</p>
                 </CardContent>
               </Card>
+              <FindingVerificationPanel key={`verification-${id}`} findingId={id} readOnly={finding.inherited} onChanged={load} />
               <FindingRetestPanel key={id} findingId={id} readOnly={finding.inherited} onCompleted={load} />
               <Card>
                 <CardHeader>
@@ -227,7 +228,6 @@ function FindingDetailInner() {
                 readOnly={finding.inherited}
                 onChanged={load}
               />
-              <FindingVerificationPanel key={`verification-${id}`} findingId={id} readOnly={finding.inherited} onChanged={load} />
               {/* 证据下方：详细报告(Markdown 渲染) */}
               <Card>
                 <CardHeader className="flex-row items-center justify-between">

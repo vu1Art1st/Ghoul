@@ -90,7 +90,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         setMcpVisible(d.visibility?.mcp ?? []);
         setSkillVisible(d.visibility?.skill ?? []);
         setMaxTurns(String(d.agent?.max_turns ?? 0));
-        setRunSecs(String(d.agent?.run_seconds ?? 600));
+        setRunSecs(String(d.agent?.run_seconds ?? 1200));
         setLlmProfileId(d.agent?.llm_profile_id != null ? String(d.agent.llm_profile_id) : "");
         setLlmProfiles(d.llm_profiles ?? []);
         setWebSearch(!!d.agent?.web_search);

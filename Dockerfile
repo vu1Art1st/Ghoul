@@ -34,7 +34,10 @@ COPY --from=web /web/out/ server/webui/dist/
 RUN CGO_ENABLED=0 GOARCH="${TARGETARCH}" go build -tags embedui -trimpath -o /out/ghoul ./cmd/ghoul && \
     CGO_ENABLED=0 GOARCH="${TARGETARCH}" go build -trimpath -o /out/hostproxy ./cmd/hostproxy
 
-########## 阶段 3：运行镜像（同原版：工具 + Playwright 预装）##########
+########## 阶段 3：Node 运行时（与前端构建统一 Node 20）##########
+FROM node:20-bookworm-slim AS noderuntime
+
+########## 阶段 4：运行镜像（同原版：工具 + Playwright 预装）##########
 FROM python:3.12-slim-bookworm
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG UV_VERSION=0.12.18
@@ -43,13 +46,17 @@ ARG MISE_VERSION=2026.10.25
 ENV npm_config_registry=$NPM_REGISTRY \
     PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
 # 常用工具：ripgrep / curl / vim，加一批 recon 常备件（按需增删）。
-# Node 从 NodeSource 装 20.x：bookworm 自带的 apt nodejs 是 18，Playwright 要求 >=20。
+# Node 直接复用官方 Node 20 镜像，避免 NodeSource 安装脚本失败时静默缺少 npm。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates ripgrep curl wget vim git jq unzip \
-      dnsutils iputils-ping netcat-openbsd inetutils-telnet whois nmap \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+      dnsutils iputils-ping netcat-openbsd inetutils-telnet whois nmap libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=noderuntime /usr/local/bin/node /usr/local/bin/node
+COPY --from=noderuntime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && node --version \
+    && npm --version
 # Shared runtime managers are part of the execution image, not lazily downloaded
 # by an agent. Keep them pinned so task environments are reproducible.
 RUN pip install --no-cache-dir "uv==${UV_VERSION}" \
@@ -73,6 +80,19 @@ RUN npm install -g @playwright/mcp@latest @playwright/cli@latest playwright@late
     && playwright-cli --help \
     && playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
+# Browser MCP and playwright-cli default to the Chrome channel. Point that
+# channel at Playwright's pinned Chromium and inject the two container-only
+# launch flags the pentest runtime needs: root requires --no-sandbox, and
+# Chromium must accept the recording proxy's MITM certificate. Keeping this in
+# the image prevents every worker from rediscovering and patching the runtime.
+RUN set -eux; \
+    chromium="$(find /root/.cache/ms-playwright -path '*/chrome-linux*/chrome' -type f | head -n 1)"; \
+    test -n "$chromium"; \
+    printf '#!/bin/sh\nexec "%s" --no-sandbox --disable-dev-shm-usage --ignore-certificate-errors "$@"\n' "$chromium" > /usr/local/bin/ghoul-chromium; \
+    chmod 0755 /usr/local/bin/ghoul-chromium; \
+    mkdir -p /opt/google/chrome; \
+    ln -sfn /usr/local/bin/ghoul-chromium /opt/google/chrome/chrome; \
+    /opt/google/chrome/chrome --version
 WORKDIR /app
 # 构建阶段产出的单二进制（内嵌前端）
 COPY --from=gobuild /out/ghoul /app/ghoul

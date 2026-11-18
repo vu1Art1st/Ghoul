@@ -54,7 +54,15 @@ func TestFindingCaseRoutesRegister(t *testing.T) {
 }
 
 func TestParseFindingMergeAgentResult(t *testing.T) {
-	got, err := parseFindingMergeAgentResult("```json\n" + `{"title":"MCP 网关无鉴权","reason":"同一匿名入口","severity":"critical","severity_reason":"无需认证即可调用工具","report":"## 概述\n\n证据一致。"}` + "\n```")
+	result := findingMergeAgentResult{
+		Title: "MCP 网关无鉴权", Reason: "同一匿名入口", Severity: db.SeverityCritical,
+		SeverityReason: "无需认证即可调用工具", Report: validHTTPDeliveryReport("MCP 网关缺少鉴权导致匿名调用"),
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseFindingMergeAgentResult("```json\n" + string(raw) + "\n```")
 	if err != nil {
 		t.Fatal(err)
 	}

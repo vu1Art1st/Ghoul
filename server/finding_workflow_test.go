@@ -304,7 +304,10 @@ func TestFindingWorkflowReporterBindsBeforeWritingReport(t *testing.T) {
 	if err := json.Unmarshal([]byte(list), &summary); err != nil || summary.Version != 1 {
 		t.Fatal(list, err)
 	}
-	workflowCall(t, ctx, workflowTool(t, tools, "update_finding_report"), map[string]any{"finding_id": f.NodeID, "evidence_version": summary.Version, "report": "## Local report\n\nVerified baseline and proof using saved evidence."}, false)
+	workflowCall(t, ctx, workflowTool(t, tools, "update_finding_report"), map[string]any{
+		"finding_id": f.NodeID, "evidence_version": summary.Version,
+		"report": validHTTPDeliveryReport("本地流量证据验证了越权读取"),
+	}, false)
 	updated, err := pg.GetFinding(f.FindingID)
 	if err != nil || updated.ReportEvidenceVersion != summary.Version || updated.EvidenceVersion != summary.Version {
 		t.Fatal("report did not cover post-binding version", updated, err)

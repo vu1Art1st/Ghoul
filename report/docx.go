@@ -32,7 +32,7 @@ type docxFont struct {
 }
 
 // EmbedFont 把一个 TTF 注册进文档，Encode 时混淆打包。公文三字体
-// （仿宋_GB2312/楷体_GB2312/方正小标宋_GBK）在新版 Windows、Linux 均不自带，
+// （仿宋-GB2312/楷体/方正小标宋_GBK）在新版 Windows、Linux 均不自带，
 // 不嵌入时 Word 静默 fallback 成宋体——行盒与字形全变（用户实测「行距全不对」
 // 的另一半根因）。嵌入后接收方无需装字体即可原样渲染。
 func (d *Docx) EmbedFont(name string, ttf []byte) {
@@ -212,8 +212,8 @@ func (d *Docx) bodyHeading(text string, level int) {
 	if level < 1 {
 		level = 1
 	}
-	if level > 3 {
-		level = 3
+	if level > 4 {
+		level = 4
 	}
 	fmt.Fprintf(&d.buf, `<w:p><w:pPr><w:pStyle w:val="BodyHeading%d"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, level, esc(text))
 }
@@ -378,7 +378,7 @@ func (d *Docx) CoverLineColored(text string, sz int, hex string, bold bool) {
 	if bold {
 		boldXML = `<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="方正小标宋_GBK"/><w:b w:val="0"/>`
 	} else {
-		boldXML = `<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋_GB2312"/><w:b w:val="0"/>`
+		boldXML = `<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋-GB2312"/><w:b w:val="0"/>`
 	}
 	szXML := ""
 	if sz > 0 {
@@ -420,7 +420,8 @@ func (d *Docx) Encode(w io.Writer) error {
 <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
 <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
-<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>`
+<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+<Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>`
 	if len(d.images) > 0 {
 		contentTypes += `
 <Default Extension="png" ContentType="image/png"/>
@@ -431,8 +432,7 @@ func (d *Docx) Encode(w io.Writer) error {
 		// odttf 的 content type：官方 MIME（Word 自产嵌入文档同款）——
 		// 写 application/octet-stream 时 Word 直接判「文件损坏」拒开。
 		contentTypes += `
-<Default Extension="odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/>
-<Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>`
+<Default Extension="odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/>`
 	}
 	contentTypes += "\n</Types>"
 
@@ -444,21 +444,18 @@ func (d *Docx) Encode(w io.Writer) error {
 	// numbering.xml：Bullet 引用 numId=1——此前包里没有这个部件，Word 里项目符号
 	// 静默不渲染（v0.3.93 A1，报告质感的显性 bug）。
 	// styles.xml 的 relationship 此前同样缺失——Word 拿不到样式部件，整个公文
-	// 样式体系（仿宋_GB2312 正文/首行缩进/28 磅固定行距/标题字体）从未生效，
+	// 样式体系（仿宋-GB2312 正文/首行缩进/28 磅固定行距/标题字体）从未生效，
 	// 全部按 Word 默认等线渲染（用户实测「行距全不对」的总根因，v0.4.4 修复）。
 	documentRels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
 <Relationship Id="rIdSty" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 <Relationship Id="rIdFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
-<Relationship Id="rIdSet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>`
+<Relationship Id="rIdSet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
+<Relationship Id="rIdFT" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>`
 	for _, img := range d.images {
 		documentRels += fmt.Sprintf(`
 <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/%s"/>`, img.rid, img.name)
-	}
-	if len(d.fonts) > 0 {
-		documentRels += `
-<Relationship Id="rIdFT" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>`
 	}
 	documentRels += "\n</Relationships>"
 
@@ -489,6 +486,12 @@ func (d *Docx) Encode(w io.Writer) error {
 </w:ftr>`
 
 	zw := zip.NewWriter(w)
+	fontXML := `<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+		`<w:font w:name="仿宋-GB2312"><w:altName w:val="仿宋_GB2312"/><w:charset w:val="86"/><w:family w:val="auto"/><w:pitch w:val="variable"/></w:font>` +
+		`<w:font w:name="楷体"><w:altName w:val="楷体_GB2312"/><w:charset w:val="86"/><w:family w:val="auto"/><w:pitch w:val="variable"/></w:font>` +
+		`<w:font w:name="黑体"><w:altName w:val="SimHei"/><w:charset w:val="86"/><w:family w:val="auto"/><w:pitch w:val="variable"/></w:font>` +
+		`<w:font w:name="方正小标宋_GBK"><w:charset w:val="86"/><w:family w:val="auto"/><w:pitch w:val="variable"/></w:font>` +
+		`</w:fonts>`
 	files := []struct{ name, body string }{
 		{"[Content_Types].xml", contentTypes},
 		{"_rels/.rels", rels},
@@ -498,6 +501,7 @@ func (d *Docx) Encode(w io.Writer) error {
 		{"word/numbering.xml", numbering()},
 		{"word/settings.xml", settings},
 		{"word/footer1.xml", footer},
+		{"word/fontTable.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + fontXML},
 	}
 	// 报告插图：word/media/imageN.ext（关系已在 document.xml.rels 里）。
 	for _, img := range d.images {
@@ -530,12 +534,16 @@ func (d *Docx) Encode(w io.Writer) error {
 				`<Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/font%d.odttf"/>`,
 				rid, i+1)
 		}
+		fontXML = strings.Replace(fontXML, "</w:fonts>", fontDecls.String()+"</w:fonts>", 1)
 		files = append(files,
-			struct{ name, body string }{"word/fontTable.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` + fontDecls.String() + `</w:fonts>`},
 			struct{ name, body string }{"word/_rels/fontTable.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` + fontRels.String() + `</Relationships>`},
 		)
+	}
+	for i := range files {
+		if files[i].name == "word/fontTable.xml" {
+			files[i].body = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + fontXML
+		}
 	}
 	for _, f := range files {
 		fw, err := zw.Create(f.name)
@@ -573,12 +581,12 @@ func numbering() string {
 // docxNum 部件按需打包；headerText 经由 Docx 字段透传。
 
 // docxStyles 内置中文公文风样式（GB/T 9704 风格取舍）：
-// 正文仿宋三号（16pt）、首行缩进 2 字符、固定行距 28 磅；
-// 一级标题黑体三号、二级黑体四号、三/四级黑体小四；
+// 正文仿宋-GB2312 三号（16pt）、首行缩进 2 字符、固定行距 28 磅；
+// 一级标题黑体三号、二级楷体三号加粗、三级及以下仿宋-GB2312 三号加粗；
 // 代码 Consolas 小五紧排+底纹。Heading1 大纲级别 0（Word 导航窗格可见）。
 const docxStyles = `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:docDefaults><w:rPrDefault><w:rPr>
-<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋_GB2312"/>
+<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋-GB2312" w:hint="eastAsia"/>
 <w:b w:val="0"/><w:color w:val="000000"/>
 <w:sz w:val="32"/><w:szCs w:val="32"/>
 </w:rPr></w:rPrDefault></w:docDefaults>
@@ -590,22 +598,25 @@ const docxStyles = `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordpro
 <w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>
 <w:pPr><w:keepNext/><w:outlineLvl w:val="1"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="楷体_GB2312"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="楷体" w:hint="eastAsia"/><w:b w:val="1"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/>
 <w:pPr><w:keepNext/><w:outlineLvl w:val="2"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋-GB2312" w:hint="eastAsia"/><w:b w:val="1"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/>
 <w:pPr><w:keepNext/><w:outlineLvl w:val="3"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋-GB2312" w:hint="eastAsia"/><w:b w:val="1"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="BodyHeading1" w:customStyle="1"><w:name w:val="Body Heading 1"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:keepNext/><w:spacing w:before="160" w:after="40" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/><w:jc w:val="left"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="30"/><w:szCs w:val="30"/></w:rPr></w:style>
+<w:pPr><w:keepNext/><w:spacing w:before="120" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体" w:hint="eastAsia"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="BodyHeading2" w:customStyle="1"><w:name w:val="Body Heading 2"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:keepNext/><w:spacing w:before="120" w:after="20" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/><w:jc w:val="left"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="楷体_GB2312"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:style>
+<w:pPr><w:keepNext/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="楷体" w:hint="eastAsia"/><w:b w:val="1"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="BodyHeading3" w:customStyle="1"><w:name w:val="Body Heading 3"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:keepNext/><w:spacing w:before="80" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/><w:jc w:val="left"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
+<w:pPr><w:keepNext/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋-GB2312" w:hint="eastAsia"/><w:b w:val="1"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="BodyHeading4" w:customStyle="1"><w:name w:val="Body Heading 4"/><w:basedOn w:val="Normal"/>
+<w:pPr><w:keepNext/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋-GB2312" w:hint="eastAsia"/><w:b w:val="1"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/>
 <w:pPr><w:spacing w:before="60" w:after="60" w:line="240" w:lineRule="auto"/>
 <w:ind w:left="240" w:firstLine="0"/><w:jc w:val="left"/>

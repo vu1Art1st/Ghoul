@@ -14,6 +14,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/report"
 	"github.com/Autumn-27/norma/llm"
 )
 
@@ -349,8 +350,8 @@ func (s *Server) clusterFindingMergeInput(ctx context.Context, runtime *taskLLMR
 
 func (s *Server) generateFindingMergeReport(ctx context.Context, runtime *taskLLMRuntime, task *Task, group findingMergeCluster, findings []*db.DBFinding) (findingMergeAgentResult, error) {
 	maxTokens := runtime.maxTokens()
-	if maxTokens <= 0 || maxTokens > 6000 {
-		maxTokens = 6000
+	if maxTokens <= 0 || maxTokens > 12000 {
+		maxTokens = 12000
 	}
 	temperature := 0.1
 	message, _, _, err := runtime.Complete(ctx, llm.CompletionRequest{
@@ -489,7 +490,8 @@ func findingMergePrompt(task *Task, findings []*db.DBFinding) string {
 		fmt.Fprintf(&b, "  摘要: %s\n", clipRunes(finding.Summary, 1600))
 		fmt.Fprintf(&b, "  证据: %s\n", clipRunes(finding.Evidence, 2600))
 		if finding.Report != "" {
-			fmt.Fprintf(&b, "  已有报告: %s\n", clipRunes(finding.Report, 3000))
+			fmt.Fprintf(&b, "  已有报告（按章节压缩，原始请求包完整保留）:\n%s\n",
+				report.CompactDeliveryReport(finding.Report, 300))
 		}
 	}
 	return b.String()
@@ -507,9 +509,14 @@ func findingMergeReportPrompt(task *Task, findings []*db.DBFinding) string {
 		fmt.Fprintf(&b, "  类型: %s\n", finding.VulnClass)
 		fmt.Fprintf(&b, "  等级: %s\n", finding.Severity)
 		fmt.Fprintf(&b, "  摘要: %s\n", clipRunes(finding.Summary, 1800))
-		fmt.Fprintf(&b, "  证据: %s\n", clipRunes(finding.Evidence, 3200))
+		fmt.Fprintf(&b, "  证据: %s\n", clipRunes(finding.Evidence, 6000))
 		if finding.Report != "" {
-			fmt.Fprintf(&b, "  已有报告: %s\n", clipRunes(finding.Report, 3200))
+			fmt.Fprintf(&b, "  已有报告（按章节压缩，原始请求包完整保留）:\n%s\n",
+				report.CompactDeliveryReport(finding.Report, 1800))
+			for i, packet := range report.ExtractHTTPRawRequests(finding.Report) {
+				fmt.Fprintf(&b, "  已核实 Yakit 原始请求包 %d（必须保留在统一报告中）:\n```http\n%s\n```\n",
+					i+1, packet)
+			}
 		}
 	}
 	return b.String()
@@ -546,6 +553,9 @@ func parseFindingMergeAgentResult(raw string) (findingMergeAgentResult, error) {
 		return findingMergeAgentResult{}, errors.New("Agent 未生成评级依据")
 	case result.Report == "":
 		return findingMergeAgentResult{}, errors.New("Agent 未生成统一报告")
+	}
+	if err := report.ValidateDeliveryReportAuto(result.Report); err != nil {
+		return findingMergeAgentResult{}, fmt.Errorf("Agent 生成的统一报告未通过交付结构校验: %w", err)
 	}
 	result.Title = clipRunes(result.Title, 80)
 	result.Reason = clipRunes(result.Reason, 2000)

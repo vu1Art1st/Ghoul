@@ -18,6 +18,14 @@ func (failingFindingRecorder) Record(context.Context, db.RecordFindingInput, []d
 	return nil, errors.New("fixture persistence failed")
 }
 
+func (failingFindingRecorder) RecordFindingScreenshot(context.Context, db.FindingScreenshotInput) (*db.FindingEvidence, error) {
+	return nil, errors.New("fixture screenshot persistence failed")
+}
+
+func (failingFindingRecorder) CaptureFindingScreenshot(context.Context, db.FindingScreenshotCaptureInput) (*db.FindingEvidence, error) {
+	return nil, errors.New("fixture controlled screenshot failed")
+}
+
 func TestReportFindingOptionalTrafficWithoutCapture(t *testing.T) {
 	d := testDB(t)
 	defer d.Close()

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -155,10 +156,10 @@ func taskTestWindow(task *Task) string {
 // represented by the current document.
 func (s *Server) artifactImageResolver(allowedOwners map[int64]bool) func(int64) ([]byte, string, bool) {
 	return func(id int64) ([]byte, string, bool) {
-		var content, storageRef, title, kind string
+		var content, storageRef, title, kind, metadata string
 		var owner int64
-		err := s.m.pg.QueryRow(`SELECT finding_id,content,storage_ref,title,kind FROM finding_evidence WHERE id=$1`, id).
-			Scan(&owner, &content, &storageRef, &title, &kind)
+		err := s.m.pg.QueryRow(`SELECT finding_id,content,storage_ref,title,kind,metadata_json::text FROM finding_evidence WHERE id=$1`, id).
+			Scan(&owner, &content, &storageRef, &title, &kind, &metadata)
 		if err != nil || owner <= 0 {
 			return nil, "", false
 		}
@@ -168,12 +169,50 @@ func (s *Server) artifactImageResolver(allowedOwners map[int64]bool) func(int64)
 		if !findingEvidenceIsImage(kind) {
 			return nil, "", false
 		}
+		if !findingEvidenceReportAllowed(metadata) {
+			return nil, "", false
+		}
 		data, err := s.evidenceImageData(content, storageRef)
 		if err != nil || len(data) == 0 {
 			return nil, "", false
 		}
-		return data, title, true
+		return data, findingEvidenceTrustCaption(metadata, title), true
 	}
+}
+
+func findingEvidenceTrustCaption(metadata, title string) string {
+	var meta struct {
+		Provenance string `json:"provenance"`
+		Source     string `json:"source"`
+	}
+	_ = json.Unmarshal([]byte(metadata), &meta)
+	switch strings.ToLower(strings.TrimSpace(meta.Provenance)) {
+	case db.FindingCaptureNativeAction, "native_action_rewrite", "native_page", "same_origin_panel":
+		return title
+	case db.FindingCaptureNavigationReplay:
+		return "导航重放截图：" + title
+	case db.FindingCaptureRawHTTPExchange:
+		return "原始 HTTP 交换证据：" + title
+	}
+	if strings.EqualFold(strings.TrimSpace(meta.Source), "c2") {
+		return title
+	}
+	if strings.TrimSpace(title) == "" {
+		return "待核验截图"
+	}
+	return "待核验截图：" + title
+}
+
+func findingEvidenceReportAllowed(metadata string) bool {
+	var meta struct {
+		Provenance string `json:"provenance"`
+		Source     string `json:"source"`
+	}
+	_ = json.Unmarshal([]byte(metadata), &meta)
+	if strings.EqualFold(strings.TrimSpace(meta.Provenance), "unverified_file") {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(meta.Source), "agent_screenshot")
 }
 
 func (s *Server) evidenceImageData(content, storageRef string) ([]byte, error) {
@@ -255,8 +294,9 @@ func (s *Server) attachEvidenceArtifacts(findings []*db.DBFinding) {
 		for _, item := range items {
 			if findingEvidenceIsImage(item.Kind) {
 				if (strings.TrimSpace(item.Content) != "" || strings.TrimSpace(item.StorageRef) != "") &&
+					findingEvidenceReportAllowed(string(item.MetadataJSON)) &&
 					!reportReferencesArtifact(finding.Report, item.ID) {
-					fmt.Fprintf(&reportRefs, "\n\n![%s](artifact:%d)", item.Title, item.ID)
+					fmt.Fprintf(&reportRefs, "\n\n![%s](artifact:%d)", findingEvidenceTrustCaption(string(item.MetadataJSON), item.Title), item.ID)
 				}
 			} else {
 				if strings.TrimSpace(item.Content) != "" {
@@ -300,8 +340,9 @@ func (s *Server) attachCaseEvidenceArtifacts(cases []report.CaseView) map[int64]
 				for _, item := range items {
 					if findingEvidenceIsImage(item.Kind) {
 						if (strings.TrimSpace(item.Content) != "" || strings.TrimSpace(item.StorageRef) != "") &&
+							findingEvidenceReportAllowed(string(item.MetadataJSON)) &&
 							!reportReferencesArtifact(cases[i].Case.Report, item.ID) {
-							fmt.Fprintf(&reportRefs, "\n\n![%s](artifact:%d)", item.Title, item.ID)
+							fmt.Fprintf(&reportRefs, "\n\n![%s](artifact:%d)", findingEvidenceTrustCaption(string(item.MetadataJSON), item.Title), item.ID)
 						}
 					} else if strings.TrimSpace(item.Content) != "" {
 						fmt.Fprintf(&text, "\n\n[%s · Finding #%d]\n%s", item.Title, member.ID, item.Content)
@@ -363,6 +404,9 @@ func reportExportWarnings(findings []*db.DBFinding, cases []report.CaseView) []s
 			add(fmt.Sprintf("Finding #%d 缺少 Markdown 报告。", finding.ID))
 			continue
 		}
+		if err := report.ValidateDeliveryReportAuto(finding.Report); err != nil {
+			add(fmt.Sprintf("Finding #%d 的 Markdown 报告不符合交付结构：%v", finding.ID, err))
+		}
 		if finding.ReportEvidenceVersion != finding.EvidenceVersion {
 			add(fmt.Sprintf("Finding #%d 的报告证据版本落后（报告 %d，当前 %d）。",
 				finding.ID, finding.ReportEvidenceVersion, finding.EvidenceVersion))
@@ -374,6 +418,10 @@ func reportExportWarnings(findings []*db.DBFinding, cases []report.CaseView) []s
 		}
 		if strings.TrimSpace(item.Case.Report) == "" {
 			add(fmt.Sprintf("漏洞组 #%d 缺少统一 Markdown 报告。", item.Case.ID))
+			continue
+		}
+		if err := report.ValidateDeliveryReportAuto(item.Case.Report); err != nil {
+			add(fmt.Sprintf("漏洞组 #%d 的统一报告不符合交付结构：%v", item.Case.ID, err))
 		}
 	}
 	return warnings

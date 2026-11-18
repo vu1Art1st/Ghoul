@@ -16,6 +16,18 @@ func assistantThinking(text string) llm.Message {
 	}}
 }
 
+func TestSteerMatchingScreenshotActionDoesNotBlock(t *testing.T) {
+	if !steerMatchesCurrentAction("收尾前补截图并绑定 finding", "capture_finding_screenshot", nil) {
+		t.Fatal("capture screenshot should satisfy screenshot steer")
+	}
+	if !steerMatchesCurrentAction("补真实浏览器截图", "Bash", []byte(`{"command":"playwright-cli open https://example.com"}`)) {
+		t.Fatal("playwright command should satisfy screenshot steer")
+	}
+	if steerMatchesCurrentAction("补真实浏览器截图", "record_fact", nil) {
+		t.Fatal("unrelated tool must still receive steering first")
+	}
+}
+
 func TestIsThinkingOnlyTurn(t *testing.T) {
 	toolUse := llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 		{Type: llm.BlockThinking, Thinking: "先扫端口"},

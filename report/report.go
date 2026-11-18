@@ -14,12 +14,14 @@ import (
 
 // Input bundles what the report needs.
 type Input struct {
-	Title       string
-	Goal        string
-	GeneratedAt time.Time
-	AssetCounts map[string]int
-	Findings    []*db.Node
-	Cases       []CaseView
+	Title            string
+	Goal             string
+	GeneratedAt      time.Time
+	AssetCounts      map[string]int
+	Findings         []*db.Node
+	DetailedFindings []*db.DBFinding
+	Cases            []CaseView
+	Warnings         []string
 }
 
 type CaseView struct {
@@ -58,10 +60,19 @@ func Markdown(in Input) string {
 	fmt.Fprintf(&b, "# 渗透测试报告 — %s\n\n", nz(in.Title, "未命名任务"))
 	fmt.Fprintf(&b, "- **任务目标**：%s\n", nz(in.Goal, "（未指定）"))
 	fmt.Fprintf(&b, "- **生成时间**：%s\n\n", in.GeneratedAt.Format("2006-01-02 15:04:05"))
+	if len(in.Warnings) > 0 {
+		b.WriteString("> **报告完整性告警**\n")
+		for _, warning := range in.Warnings {
+			if warning = strings.TrimSpace(warning); warning != "" {
+				fmt.Fprintf(&b, "> - %s\n", warning)
+			}
+		}
+		b.WriteString("\n")
+	}
 
 	// summary
 	fmt.Fprintf(&b, "## 摘要\n\n")
-	fmt.Fprintf(&b, "- 确认发现：**%d** 个\n", len(in.Findings)+len(in.Cases))
+	fmt.Fprintf(&b, "- 确认发现：**%d** 个\n", len(in.Findings)+len(in.DetailedFindings)+len(in.Cases))
 	fmt.Fprintf(&b, "- 资产：")
 	var types []string
 	for t := range in.AssetCounts {
@@ -78,7 +89,7 @@ func Markdown(in Input) string {
 
 	// findings
 	fmt.Fprintf(&b, "## 发现\n\n")
-	if len(in.Findings) == 0 && len(in.Cases) == 0 {
+	if len(in.Findings) == 0 && len(in.DetailedFindings) == 0 && len(in.Cases) == 0 {
 		b.WriteString("_本次未确认漏洞。_\n\n")
 	} else {
 		index := 1
@@ -103,6 +114,36 @@ func Markdown(in Input) string {
 			}
 			b.WriteString(item.Case.Report)
 			b.WriteString("\n\n")
+			index++
+		}
+		detailed := append([]*db.DBFinding(nil), in.DetailedFindings...)
+		sortFindingsForExport(detailed)
+		for _, f := range detailed {
+			if f == nil {
+				continue
+			}
+			fmt.Fprintf(&b, "### %d. [%s] %s\n\n", index, strings.ToUpper(nz(f.Severity, "info")), findingTitle(f))
+			if f.VulnClass != "" {
+				fmt.Fprintf(&b, "- **类别**：%s\n", f.VulnClass)
+			}
+			fmt.Fprintf(&b, "- **状态**：%s\n", nz(f.Status, "pending"))
+			if desc := strings.TrimSpace(f.TaskDescription); desc != "" {
+				fmt.Fprintf(&b, "- **所属任务**：%s\n", desc)
+			}
+			fmt.Fprintf(&b, "- **发现时间**：%s\n\n", f.CreatedAt.Format("2006-01-02 15:04:05"))
+			if s := strings.TrimSpace(f.Summary); s != "" {
+				fmt.Fprintf(&b, "**摘要：** %s\n\n", s)
+			}
+			if e := strings.TrimSpace(f.Evidence); e != "" {
+				fmt.Fprintf(&b, "**证据：**\n\n```\n%s\n```\n\n", e)
+			}
+			if rep := strings.TrimSpace(f.Report); rep != "" {
+				b.WriteString("**详细报告：**\n\n")
+				b.WriteString(rep)
+				b.WriteString("\n\n")
+			}
+			b.WriteString(findingTrafficMarkdown(f, false))
+			b.WriteString("---\n\n")
 			index++
 		}
 		fs := make([]findingView, 0, len(in.Findings))

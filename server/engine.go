@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -583,8 +584,12 @@ func isThinkingOnlyTurn(messages []llm.Message) bool {
 
 func (h steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
 	if msg, ok := h.drain(); ok {
-		return true, "【规划者实时纠偏】" + msg +
-			"\n（这是规划者对本意图的即时指令；本次工具调用未执行，请据此调整下一步。若与你当前打算冲突，以此为准。）", nil
+		if steerMatchesCurrentAction(msg, name, input) {
+			log.Printf("[work %s] 纠偏与当前动作一致，允许继续执行：%s", h.label, name)
+		} else {
+			return true, "【规划者实时纠偏】" + msg +
+				"\n（这是规划者对本意图的即时指令；本次工具调用未执行，请据此调整下一步。若与你当前打算冲突，以此为准。）", nil
+		}
 	}
 	if h.inner != nil {
 		block, msg, updated := h.inner.PreToolUse(ctx, name, input)
@@ -601,21 +606,40 @@ func (h steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (
 			return true, repeatBlockText(streak), nil
 		}
 	}
-	if block, msg, cancel := h.idle.beforeTool(name); block {
-		if cancel && h.cancel != nil {
-			h.cancel(agent.AbortIdleStop)
-		}
-		log.Printf("[work %s] 无增量自动收场检查拦截 %s（cancel=%v）", h.label, name, cancel)
-		return true, msg, nil
-	}
 	return false, "", nil
+}
+
+// steerMatchesCurrentAction avoids throwing away the exact tool call the planner
+// just asked for. This happened in practice: a steer requested a screenshot while
+// the worker was already launching Playwright, and the steer hook blocked that
+// launch.
+func steerMatchesCurrentAction(msg, tool string, input []byte) bool {
+	lowerMsg := strings.ToLower(msg)
+	wantsScreenshot := strings.Contains(lowerMsg, "截图") || strings.Contains(lowerMsg, "screenshot")
+	if !wantsScreenshot {
+		return false
+	}
+	switch tool {
+	case "capture_finding_screenshot", "save_finding_screenshot":
+		return true
+	case "Bash":
+		var args struct {
+			Command string `json:"command"`
+		}
+		_ = json.Unmarshal(input, &args)
+		cmd := strings.ToLower(args.Command)
+		return strings.Contains(cmd, "playwright") ||
+			strings.Contains(cmd, "chrome") ||
+			strings.Contains(cmd, "screenshot")
+	default:
+		return false
+	}
 }
 
 func (h steerHooks) PostToolUse(ctx context.Context, name string, input, result []byte, isErr bool) {
 	if h.inner != nil {
 		h.inner.PostToolUse(ctx, name, input, result, isErr)
 	}
-	h.idle.advance(name)
 }
 
 // Stop 在 guard 原有语义之上补一层「空转回合」续跑:模型只输出了思考、既没给正文
@@ -1035,9 +1059,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// wrap the guard hooks so steer_work can inject a mid-run course-correction
 	// for THIS intent (drained before the worker's next tool call).
 	iid := intent.ID
-	idle := newIdleStopTracker()
+	idle := newIdleStopTrackerForMode(workerIdleStopModeFromPG(e.m.pg))
 	taskEmit := func(a db.Activity) {
-		if a.Kind == "tool_result" && !a.IsError && idleStopWriteTools[a.Tool] {
+		if idle != nil && a.Kind == "tool_result" && !a.IsError && idleStopWriteTools[a.Tool] {
 			idle.noteWrite()
 		}
 		nid := iid
@@ -1104,7 +1128,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// unregister would always be true (unregister cancels it) → every completed
 	// work would be wrongly marked stopped.
 	workCause := context.Cause(workCtx)
-	idleStopped := errors.Is(workCause, agent.AbortIdleStop) || idle.stoppedByIdle()
+	idleStopped := errors.Is(workCause, agent.AbortIdleStop) || (idle != nil && idle.stoppedByIdle())
 	killed := workCtx.Err() != nil && ectx.Err() == nil && !idleStopped
 	action, completeWork := e.detachWork(intent.ID)
 	// A caller may stop waiting and release its in-memory reservation before the

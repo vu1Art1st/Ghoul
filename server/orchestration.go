@@ -11,6 +11,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/report"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -441,7 +442,7 @@ func (s *Server) toolGetTaskNodeDetail() actool.CoreTool {
 // task-agnostic, so this host tool needs no task_id / exploration store.
 func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 	return wrTool("update_finding_report",
-		"为已登记的漏洞写入/更新【详细报告】(Markdown 全文,整段覆盖旧内容)。finding_id 传 report_finding 返回的那个 id(\"finding recorded: <id>\" 里的数字)。报告建议包含:漏洞概述、影响与危害、复现步骤、证据/PoC、修复建议。",
+		"为已登记的漏洞写入/更新【详细报告】(Markdown 全文,整段覆盖旧内容)。finding_id 传 report_finding 返回的那个 id(\"finding recorded: <id>\" 里的数字)。报告必须按顺序包含非空二级章节：## 概述、## 影响与危害、## 受影响范围、## 复现步骤、## 证据、## PoC、## 根因分析、## 修复建议。HTTP 漏洞的复现步骤和 PoC 都必须包含可直接粘贴到 Yakit 的原始请求包代码块（METHOD /path HTTP/1.1、Host 及必要请求头/请求体）；无独立 PoC 时在 PoC 章节明确写“复现步骤即为 PoC”。结构校验失败时报告不会入库。",
 		objSchema(map[string]any{
 			"finding_id":       map[string]any{"type": "integer", "description": "目标漏洞 id(report_finding 返回的 id)"},
 			"report":           strParam("详细报告全文,Markdown 格式"),
@@ -457,6 +458,9 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 			nodeID := parseProfileID(a.FindingID) // 复用「数字或数字字符串」解析
 			if nodeID <= 0 {
 				return actool.Errorf("finding_id 无效"), nil
+			}
+			if err := report.ValidateDeliveryReportAuto(a.Report); err != nil {
+				return actool.Errorf(fmt.Sprintf("详细报告未通过交付结构校验: %v", err)), nil
 			}
 			n, err := s.m.pg.SetFindingReportVersionByNodeID(ctx, nodeID, a.Report, a.EvidenceVersion)
 			if err != nil {
@@ -518,6 +522,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.reseedPlannerPrompt()           // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
 	s.reseedWorkerPrompt()            // worker 提示词:加否定结论证据门槛(一次性)
 	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
+	s.reseedReporterPrompt()          // reporter 提示词:补齐 8 章节与 Yakit 原始请求包契约(一次性)
 	s.seedFindingMergerAgent()        // 预置「漏洞归并」agent(一次性)
 	s.upgradeFindingMergerPrompt()    // 旧单组提示词升级为多组聚类提示词(一次性)
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
@@ -534,7 +539,7 @@ func (s *Server) seedOrchestrationTools() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v7_list_facts_paging"
+	const flag = "tool_schema_refresh_v8_report_contract"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
@@ -702,6 +707,35 @@ func (s *Server) reseedWorkerPrompt() {
 		return
 	}
 	log.Printf("[prompts] worker 提示词已追加新默认版本(查上下文段收敛为 list_assets/list_findings,去掉 list_facts/node_detail/asset_neighbors,一次性)")
+}
+
+// reseedReporterPrompt upgrades only the legacy built-in reporter body. A
+// heavily customized reporter prompt is left untouched; the tool-level report
+// validator still prevents incomplete output from being saved.
+func (s *Server) reseedReporterPrompt() {
+	const flag = "reporter_prompt_delivery_contract_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	defer func() { _ = s.m.pg.SetSetting(flag, "true") }()
+	a, err := s.m.pg.GetAgentByKey("reporter")
+	if err != nil || a == nil {
+		return // seedReporterAgent creates a fresh agent with the current prompt
+	}
+	current, err := s.m.pg.CurrentPrompt(a.ID)
+	if err != nil || strings.TrimSpace(current) == "" {
+		return
+	}
+	if current == agent.ReporterDefaultPrompt ||
+		(!strings.Contains(current, "报告结构（Markdown，按需裁剪") &&
+			!strings.Contains(current, "能贴 PoC 就贴")) {
+		return
+	}
+	if _, err := s.m.pg.ResetPromptToDefault(a.ID, agent.ReporterDefaultPrompt); err != nil {
+		log.Printf("[prompts] reporter 提示词重刷为新默认失败: %v", err)
+		return
+	}
+	log.Printf("[prompts] reporter 提示词已升级为 8 章节 + Yakit 原始请求包契约")
 }
 
 // reporterToolCallMessage 必须无条件要求先读一次 get_finding_traffic 再写报告。

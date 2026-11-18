@@ -83,6 +83,85 @@ func TestDocxStructure(t *testing.T) {
 	}
 }
 
+func TestDocxGongwenStyleContract(t *testing.T) {
+	d := NewDocx()
+	d.H1("一、一级")
+	d.H2("（一）二级")
+	d.H3("1. 三级")
+	d.P("正文")
+	var buf bytes.Buffer
+	if err := d.Encode(&buf); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := map[string]string{}
+	for _, f := range zr.File {
+		rc, _ := f.Open()
+		var b bytes.Buffer
+		_, _ = b.ReadFrom(rc)
+		rc.Close()
+		parts[f.Name] = b.String()
+	}
+	styles := parts["word/styles.xml"]
+	for _, frag := range []string{
+		`w:eastAsia="仿宋-GB2312" w:hint="eastAsia"`,
+		`<w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/>`,
+		`w:styleId="Heading2"`,
+		`w:eastAsia="楷体" w:hint="eastAsia"/><w:b w:val="1"`,
+		`w:styleId="Heading3"`,
+		`w:eastAsia="仿宋-GB2312" w:hint="eastAsia"/><w:b w:val="1"`,
+		`<w:sz w:val="32"/><w:szCs w:val="32"/>`,
+	} {
+		if !strings.Contains(styles, frag) {
+			t.Errorf("styles.xml missing %q", frag)
+		}
+	}
+	fonts := parts["word/fontTable.xml"]
+	if !strings.Contains(fonts, `w:name="仿宋-GB2312"`) || !strings.Contains(fonts, `w:altName w:val="仿宋_GB2312"`) {
+		t.Fatalf("fontTable aliases missing: %s", fonts)
+	}
+}
+
+func TestWriteMarkdownishNormalizesGongwenNumbering(t *testing.T) {
+	d := NewDocx()
+	writeMarkdownish(d, "# 渗透测试报告\n## 1. 执行摘要\n### 受影响资产\n### 4.1 核心复现\n#### 1. 请求\n## 2. 修复建议\n")
+	var buf bytes.Buffer
+	if err := d.Encode(&buf); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc string
+	for _, f := range zr.File {
+		if f.Name == "word/document.xml" {
+			rc, _ := f.Open()
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(rc)
+			rc.Close()
+			doc = b.String()
+		}
+	}
+	for _, frag := range []string{
+		"一、执行摘要",
+		"（一）受影响资产",
+		"（二）核心复现",
+		"1. 请求",
+		"二、修复建议",
+	} {
+		if !strings.Contains(doc, frag) {
+			t.Errorf("document.xml missing normalized heading %q", frag)
+		}
+	}
+	if strings.Contains(doc, "渗透测试报告") || strings.Contains(doc, "1. 执行摘要") || strings.Contains(doc, "4.1 核心复现") {
+		t.Fatalf("raw model numbering/title leaked into document: %s", doc)
+	}
+}
+
 func TestZeroTimeFormatsAsDash(t *testing.T) {
 	if got := FormatTimeUTC(time.Time{}); got != "-" {
 		t.Fatalf("zero time=%q want dash", got)
@@ -282,7 +361,7 @@ func TestWriteMarkdownishRich(t *testing.T) {
 	for _, frag := range []string{
 		"<w:tbl>",      // 表格真 OOXML 化
 		"<w:b/>",       // 加粗 run
-		"BodyHeading2", // ## → 不进 TOC 的正文二级标题
+		"BodyHeading1", // ## → 公文一级正文标题（报告首行 H1 标题会被去除）
 		"w:numId",      // bullet 编号引用
 		"<w:tblHeader/>",
 		"<w:cantSplit/>",

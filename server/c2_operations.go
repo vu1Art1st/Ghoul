@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -633,7 +634,12 @@ func (s *c2Service) watchOperationTask(ctx context.Context, operationID, taskID 
 			}
 			output := task.Output
 			if output == "" && task.OutputB64 != "" {
-				if raw, err := base64.StdEncoding.DecodeString(task.OutputB64); err == nil {
+				if task.TaskType == "screenshot" {
+					// decodeC2Screenshot expects base64/Data URL text. Decoding
+					// output_b64 first would turn the PNG into a binary string and
+					// force a second, impossible base64 decode.
+					output = task.OutputB64
+				} else if raw, err := base64.StdEncoding.DecodeString(task.OutputB64); err == nil {
 					output = string(raw)
 				}
 			}
@@ -644,21 +650,36 @@ func (s *c2Service) watchOperationTask(ctx context.Context, operationID, taskID 
 			result := sanitize.Text(output, maxBytes)
 			kind := "output"
 			mime := "text/plain"
+			content := result.Text
+			sha := result.SHA256
+			size := int64(result.Size)
+			redacted := result.Redacted
+			summary := sanitize.Summary(output, 600)
 			switch task.TaskType {
 			case "file_list":
 				kind = "file_list"
 			case "process_list":
 				kind = "process_list"
 			case "screenshot":
-				kind, mime = "screenshot", "image/png"
+				raw, rawMime, decodeErr := decodeC2Screenshot(output)
+				if decodeErr != nil {
+					_ = s.pg.MarkC2OperationFailed(context.Background(), operationID, decodeErr.Error())
+					return
+				}
+				sum := sha256.Sum256(raw)
+				kind, mime = "screenshot", rawMime
+				content = "data:" + rawMime + ";base64," + base64.StdEncoding.EncodeToString(raw)
+				sha = hex.EncodeToString(sum[:])
+				size = int64(len(raw))
+				summary = "screenshot captured"
 			}
 			op, _ := s.pg.GetC2Operation(ctx, operationID)
 			if op == nil {
 				return
 			}
 			evidence := db.C2Evidence{
-				Kind: kind, Title: task.TaskType, Mime: mime, Content: result.Text,
-				SHA256: result.SHA256, Size: int64(result.Size), Redacted: result.Redacted,
+				Kind: kind, Title: task.TaskType, Mime: mime, Content: content,
+				SHA256: sha, Size: size, Redacted: redacted,
 				MetadataJSON: c2MustJSON(map[string]any{"task_id": taskID, "status": status, "exit_code": task.ExitCode}),
 			}
 			if err := s.recordEvidence(ctx, op, evidence); err != nil {
@@ -671,10 +692,37 @@ func (s *c2Service) watchOperationTask(ctx context.Context, operationID, taskID 
 				final = "failed"
 				errText = firstNonEmpty(task.Error, status)
 			}
-			_ = s.pg.MarkC2OperationResult(ctx, operationID, final, sanitize.Summary(output, 600), result.SHA256, errText)
+			_ = s.pg.MarkC2OperationResult(ctx, operationID, final, summary, sha, errText)
 			return
 		}
 	}
+}
+
+// decodeC2Screenshot normalizes the Toshell screenshot task payload. Older
+// versions returned a bare base64 body, while newer ones may return a data URL.
+// Treating base64 as redactable text used to truncate or corrupt the PNG, which
+// left the evidence row present but no previewable image.
+func decodeC2Screenshot(output string) ([]byte, string, error) {
+	raw := strings.TrimSpace(output)
+	if raw == "" {
+		return nil, "", errors.New("screenshot task returned an empty payload")
+	}
+	if strings.HasPrefix(raw, "data:") {
+		comma := strings.IndexByte(raw, ',')
+		if comma < 0 {
+			return nil, "", errors.New("screenshot data URL is malformed")
+		}
+		raw = raw[comma+1:]
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil || len(data) == 0 {
+		return nil, "", errors.New("screenshot task did not return valid base64 image data")
+	}
+	mime := strings.SplitN(http.DetectContentType(data), ";", 2)[0]
+	if !strings.HasPrefix(mime, "image/") {
+		return nil, "", fmt.Errorf("screenshot payload is %s, not an image", mime)
+	}
+	return data, mime, nil
 }
 
 func (s *c2Service) recordEvidence(ctx context.Context, op *db.C2Operation, item db.C2Evidence) error {

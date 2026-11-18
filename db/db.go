@@ -261,8 +261,16 @@ ON CONFLICT (agent_id, var_name) DO UPDATE
 INSERT INTO mcp_servers(name, transport, command, args, env, enabled)
 VALUES ('browser', 'stdio', 'npx', $1, '{}', false)
 ON CONFLICT (name) DO NOTHING`,
-		`["@playwright/mcp","--headless"]`); err != nil {
+		`["@playwright/mcp","--headless","--isolated"]`); err != nil {
 		return fmt.Errorf("seed browser mcp: %w", err)
+	}
+	// Upgrade only the untouched old seed. --isolated avoids concurrent workers
+	// fighting over a persistent Chrome profile; user-edited args stay intact.
+	if _, err := d.Exec(`
+UPDATE mcp_servers
+SET args='["@playwright/mcp","--headless","--isolated"]'
+WHERE name='browser' AND args='["@playwright/mcp","--headless"]'`); err != nil {
+		return fmt.Errorf("upgrade browser mcp seed: %w", err)
 	}
 	// NOTE: the placeholder ScopeSentry data-source MCP (empty URL + empty X-API-Key,
 	// disabled) is seeded directly in schema.sql §F so a raw `psql < schema.sql` init
